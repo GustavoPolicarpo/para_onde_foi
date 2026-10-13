@@ -72,9 +72,15 @@ class _ExpenseHomeState extends State<ExpenseHome> {
   List<ExpenseCategory> _categories = expenseCategories;
   Map<String, int> _budgets = {};
   List<RecurringRule> _recurringRules = [];
+  List<String> _tags = [];
   final _searchController = TextEditingController();
   DateTimeRange? _dateRange;
   EntryType? _typeFilter;
+  final Set<String> _movementTagFilters = {};
+  final Set<String> _reportTagFilters = {};
+  bool _reportGroupByTags = false;
+  bool _selectionMode = false;
+  final Set<String> _selectedIds = {};
   bool _loading = true;
   int _page = 0;
   DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
@@ -97,6 +103,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
     final customCategories = await _repository.loadCategories();
     final budgets = await _repository.loadBudgets();
     final recurringRules = await _repository.loadRecurringRules();
+    final storedTags = await _repository.loadTags();
     final categoryMap = {
       for (final category in expenseCategories) category.id: category,
     };
@@ -109,6 +116,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
       _categories = categoryMap.values.toList();
       _budgets = budgets;
       _recurringRules = recurringRules;
+      _tags = storedTags;
       _loading = false;
     });
   }
@@ -167,6 +175,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
         expense: expense,
         currency: _currency,
         categories: _categories,
+        knownTags: _tags,
       ),
     );
     if (result == null) return;
@@ -177,7 +186,25 @@ class _ExpenseHomeState extends State<ExpenseHome> {
     } else {
       next[index] = result;
     }
+    await _persistTags({..._tags, ...result.tags}.toList());
     await _persist(next);
+  }
+
+  Future<void> _persistTags(List<String> next) async {
+    final clean =
+        next
+            .map((tag) => tag.trim())
+            .where((tag) => tag.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    await _repository.saveTags(clean);
+    if (mounted)
+      setState(() {
+        _tags = clean;
+        _movementTagFilters.removeWhere((tag) => !clean.contains(tag));
+        _reportTagFilters.removeWhere((tag) => !clean.contains(tag));
+      });
   }
 
   Future<void> _deleteExpense(Expense expense) async {
@@ -204,6 +231,91 @@ class _ExpenseHomeState extends State<ExpenseHome> {
       await _persist(_expenses.where((item) => item.id != expense.id).toList());
     }
   }
+
+  Future<void> _bulkChangeCategory() async {
+    final categoryId = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Definir categoria'),
+        children: _categories
+            .where((category) => !category.archived)
+            .map(
+              (category) => SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, category.id),
+                child: Text(category.label),
+              ),
+            )
+            .toList(),
+      ),
+    );
+    if (categoryId == null || _selectedIds.isEmpty) return;
+    await _persist(
+      _expenses
+          .map(
+            (entry) => _selectedIds.contains(entry.id)
+                ? entry.copyWith(
+                    categoryId: categoryId,
+                    categorizationMethod: CategorizationMethod.manual,
+                  )
+                : entry,
+          )
+          .toList(),
+    );
+    _endSelection();
+  }
+
+  Future<void> _bulkAddTag() async {
+    if (_selectedIds.isEmpty) return;
+    final tag = await showDialog<String>(
+      context: context,
+      builder: (_) => TagInputDialog(suggestions: _tags),
+    );
+    if (tag == null) return;
+    await _persistTags([..._tags, tag]);
+    await _persist(
+      _expenses.map((entry) {
+        if (!_selectedIds.contains(entry.id)) return entry;
+        return entry.copyWith(tags: {...entry.tags, tag}.toList());
+      }).toList(),
+    );
+    _endSelection();
+  }
+
+  Future<void> _bulkRemoveTag() async {
+    if (_selectedIds.isEmpty) return;
+    final tag = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Remover tag dos selecionados'),
+        children: _tags
+            .map(
+              (tag) => SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, tag),
+                child: Text(tag),
+              ),
+            )
+            .toList(),
+      ),
+    );
+    if (tag == null) return;
+    await _persist(
+      _expenses
+          .map(
+            (entry) => _selectedIds.contains(entry.id)
+                ? entry.copyWith(
+                    tags: entry.tags.where((item) => item != tag).toList(),
+                  )
+                : entry,
+          )
+          .toList(),
+    );
+    _endSelection();
+  }
+
+  void _endSelection() => setState(() {
+    _selectionMode = false;
+    _selectedIds.clear();
+  });
 
   void _changeMonth(int amount) => setState(() {
     _month = DateTime(_month.year, _month.month + amount);
@@ -375,7 +487,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Entradas ${_currency.format(_monthIncomeTotal / 100)}  ·  Saídas ${_currency.format(_monthExpensesTotal / 100)}',
+                  'Receitas ${_currency.format(_monthIncomeTotal / 100)}  ·  Despesas ${_currency.format(_monthExpensesTotal / 100)}',
                   style: TextStyle(color: Colors.grey.shade600),
                 ),
                 const SizedBox(height: 18),
@@ -413,9 +525,10 @@ class _ExpenseHomeState extends State<ExpenseHome> {
                   (_categoryFilter == null ||
                       expense.categoryId == _categoryFilter) &&
                   (_typeFilter == null || expense.type == _typeFilter) &&
-                  expense.description.toLowerCase().contains(
-                    _searchController.text.trim().toLowerCase(),
-                  ) &&
+                  ('${expense.description} ${expense.tags.join(' ')}')
+                      .toLowerCase()
+                      .contains(_searchController.text.trim().toLowerCase()) &&
+                  _movementTagFilters.every(expense.tags.contains) &&
                   (_dateRange == null ||
                       (!expense.spentAt.isBefore(
                             DateTime(
@@ -439,7 +552,23 @@ class _ExpenseHomeState extends State<ExpenseHome> {
           ..sort((a, b) => b.spentAt.compareTo(a.spentAt));
     return ListView(
       children: [
-        _pageHeader('Movimentos', 'Entradas e despesas do mês selecionado.'),
+        Row(
+          children: [
+            Expanded(
+              child: _pageHeader(
+                'Movimentos',
+                'Entradas e despesas do período selecionado.',
+              ),
+            ),
+            TextButton(
+              onPressed: () => setState(() {
+                _selectionMode = !_selectionMode;
+                _selectedIds.clear();
+              }),
+              child: Text(_selectionMode ? 'Cancelar' : 'Selecionar'),
+            ),
+          ],
+        ),
         const SizedBox(height: 16),
         if (_dateRange == null)
           _monthSelector()
@@ -493,7 +622,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
                   ),
                   DropdownMenuItem<EntryType?>(
                     value: EntryType.income,
-                    child: Text('Entradas'),
+                    child: Text('Receitas'),
                   ),
                 ],
                 onChanged: (value) => setState(() => _typeFilter = value),
@@ -539,13 +668,97 @@ class _ExpenseHomeState extends State<ExpenseHome> {
           ],
           onChanged: (value) => setState(() => _categoryFilter = value),
         ),
-        const SizedBox(height: 16),
+        if (_tags.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          const Text('Filtrar pelas tags'),
+          Wrap(
+            spacing: 6,
+            children: _tags
+                .map(
+                  (tag) => FilterChip(
+                    label: Text(tag),
+                    selected: _movementTagFilters.contains(tag),
+                    onSelected: (selected) => setState(() {
+                      if (selected) {
+                        _movementTagFilters.add(tag);
+                      } else {
+                        _movementTagFilters.remove(tag);
+                      }
+                    }),
+                  ),
+                )
+                .toList(),
+          ),
+        ],
+        const SizedBox(height: 12),
+        if (_selectionMode)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${_selectedIds.length} selecionado(s)'),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      TextButton.icon(
+                        onPressed: () => setState(() {
+                          final visibleIds = entries
+                              .map((entry) => entry.id)
+                              .toSet();
+                          if (visibleIds.isNotEmpty &&
+                              visibleIds.every(_selectedIds.contains)) {
+                            _selectedIds.removeAll(visibleIds);
+                          } else {
+                            _selectedIds.addAll(visibleIds);
+                          }
+                        }),
+                        icon: const Icon(Icons.select_all),
+                        label: const Text('Visíveis'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _selectedIds.isEmpty
+                            ? null
+                            : _bulkChangeCategory,
+                        icon: const Icon(Icons.category_outlined),
+                        label: const Text('Categoria'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _selectedIds.isEmpty ? null : _bulkAddTag,
+                        icon: const Icon(Icons.sell_outlined),
+                        label: const Text('Adicionar tag'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _selectedIds.isEmpty || _tags.isEmpty
+                            ? null
+                            : _bulkRemoveTag,
+                        icon: const Icon(Icons.remove_circle_outline),
+                        label: const Text('Remover tag'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
         if (entries.isEmpty)
           _emptyState(
             'Nada por aqui',
             'Tente outro filtro ou adicione uma despesa.',
           ),
-        ...entries.map((expense) => _expenseTile(expense, actions: true)),
+        ...entries.map(
+          (expense) => _expenseTile(
+            expense,
+            actions: !_selectionMode,
+            selectionMode: _selectionMode,
+            selected: _selectedIds.contains(expense.id),
+            onSelect: () => setState(() {
+              if (!_selectedIds.add(expense.id))
+                _selectedIds.remove(expense.id);
+            }),
+          ),
+        ),
         const SizedBox(height: 84),
       ],
     );
@@ -553,22 +766,67 @@ class _ExpenseHomeState extends State<ExpenseHome> {
 
   Widget _reports() {
     final totals = <String, int>{};
-    for (final expense in _monthExpenses.where(
-      (entry) => entry.type == EntryType.expense,
-    )) {
+    final reportEntries = _monthExpenses.where(
+      (entry) =>
+          entry.type == EntryType.expense &&
+          _reportTagFilters.every(entry.tags.contains),
+    );
+    for (final expense in reportEntries) {
+      final groupKey = _reportGroupByTags
+          ? (expense.tags.isEmpty
+                ? 'Sem tags'
+                : (expense.tags.toList()..sort()).join(' + '))
+          : expense.categoryId;
       totals.update(
-        expense.categoryId,
+        groupKey,
         (value) => value + expense.amountCents,
         ifAbsent: () => expense.amountCents,
       );
     }
     final ordered = totals.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
+    final filteredTotal = reportEntries.fold<int>(
+      0,
+      (sum, entry) => sum + entry.amountCents,
+    );
     return ListView(
       children: [
         _pageHeader('Relatórios', 'Veja para onde está indo seu dinheiro.'),
         const SizedBox(height: 16),
         _monthSelector(),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<bool>(
+          initialValue: _reportGroupByTags,
+          decoration: const InputDecoration(labelText: 'Agrupar por'),
+          items: const [
+            DropdownMenuItem(value: false, child: Text('Categoria')),
+            DropdownMenuItem(value: true, child: Text('Combinação de tags')),
+          ],
+          onChanged: (value) =>
+              setState(() => _reportGroupByTags = value ?? false),
+        ),
+        if (_tags.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          const Text('Combinar filtros de tags (todos os selecionados)'),
+          Wrap(
+            spacing: 6,
+            children: _tags
+                .map(
+                  (tag) => FilterChip(
+                    label: Text(tag),
+                    selected: _reportTagFilters.contains(tag),
+                    onSelected: (selected) => setState(() {
+                      if (selected) {
+                        _reportTagFilters.add(tag);
+                      } else {
+                        _reportTagFilters.remove(tag);
+                      }
+                    }),
+                  ),
+                )
+                .toList(),
+          ),
+        ],
         const SizedBox(height: 12),
         Card(
           child: Padding(
@@ -576,13 +834,15 @@ class _ExpenseHomeState extends State<ExpenseHome> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Gastos por categoria',
+                Text(
+                  _reportGroupByTags
+                      ? 'Gastos por combinação de tags'
+                      : 'Gastos por categoria',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 5),
                 Text(
-                  _currency.format(_monthExpensesTotal / 100),
+                  _currency.format(filteredTotal / 100),
                   style: TextStyle(color: Colors.grey.shade700),
                 ),
                 const SizedBox(height: 20),
@@ -592,21 +852,29 @@ class _ExpenseHomeState extends State<ExpenseHome> {
                     child: Center(child: Text('Sem despesas para este mês')),
                   ),
                 ...ordered.map((entry) {
-                  final category = categoryFor(entry.key, _categories);
-                  final ratio = _monthExpensesTotal == 0
+                  final category = !_reportGroupByTags
+                      ? categoryFor(entry.key, _categories)
+                      : null;
+                  final ratio = filteredTotal == 0
                       ? 0.0
-                      : entry.value / _monthExpensesTotal;
+                      : entry.value / filteredTotal;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 18),
                     child: Column(
                       children: [
                         Row(
                           children: [
-                            _categoryIcon(category, size: 34),
+                            if (category != null)
+                              _categoryIcon(category, size: 34)
+                            else
+                              const CircleAvatar(
+                                radius: 17,
+                                child: Icon(Icons.sell_outlined, size: 17),
+                              ),
                             const SizedBox(width: 10),
                             Expanded(
                               child: Text(
-                                category.label,
+                                category?.label ?? entry.key,
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -626,7 +894,9 @@ class _ExpenseHomeState extends State<ExpenseHome> {
                           child: LinearProgressIndicator(
                             value: ratio,
                             minHeight: 7,
-                            color: Color(category.colorValue),
+                            color: category == null
+                                ? Theme.of(context).colorScheme.primary
+                                : Color(category.colorValue),
                             backgroundColor: const Color(0xFFF0F1EF),
                           ),
                         ),
@@ -771,6 +1041,17 @@ class _ExpenseHomeState extends State<ExpenseHome> {
           onTap: _manageCategories,
         ),
       ),
+      Card(
+        child: ListTile(
+          leading: const Icon(Icons.sell_outlined),
+          title: const Text('Gerenciar tags'),
+          subtitle: Text(
+            '${_tags.length} tags cadastradas para sugerir nos lançamentos.',
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _manageTags,
+        ),
+      ),
       const SizedBox(height: 18),
       _sectionHeading(
         'Recorrências',
@@ -849,27 +1130,27 @@ class _ExpenseHomeState extends State<ExpenseHome> {
         ),
       ),
       const SizedBox(height: 18),
-      _sectionHeading('Backup', action: null),
+      _sectionHeading('Dados e CSV', action: null),
       const SizedBox(height: 8),
       Card(
         child: Column(
           children: [
             ListTile(
               leading: const Icon(Icons.file_upload_outlined),
-              title: const Text('Exportar backup'),
+              title: const Text('Exportar CSV'),
               subtitle: const Text(
-                'Salva lançamentos, categorias, limites e recorrências em JSON.',
+                'Editável em planilhas; inclui movimentos, tags, categorias, limites e recorrências.',
               ),
-              onTap: _exportBackup,
+              onTap: _exportCsv,
             ),
             const Divider(height: 1),
             ListTile(
               leading: const Icon(Icons.file_download_outlined),
-              title: const Text('Importar backup'),
+              title: const Text('Importar CSV'),
               subtitle: const Text(
-                'Mescla dados ou substitui os dados locais.',
+                'Mescla ou substitui dados locais a partir de um CSV.',
               ),
-              onTap: _importBackup,
+              onTap: _importCsv,
             ),
           ],
         ),
@@ -988,13 +1269,13 @@ class _ExpenseHomeState extends State<ExpenseHome> {
                           (category) => ListTile(
                             leading: _categoryIcon(category, size: 34),
                             title: Text(category.label),
-                            subtitle: Text(
-                              category.archived
-                                  ? 'Arquivada · lançamentos antigos preservados'
-                                  : category.isCustom
-                                  ? 'Personalizada'
-                                  : 'Padrão',
-                            ),
+                            subtitle: category.archived
+                                ? const Text(
+                                    'Arquivada · lançamentos antigos preservados',
+                                  )
+                                : category.isCustom
+                                ? const Text('Personalizada')
+                                : null,
                             trailing: PopupMenuButton<String>(
                               onSelected: (value) async {
                                 if (value == 'edit') {
@@ -1097,18 +1378,141 @@ class _ExpenseHomeState extends State<ExpenseHome> {
     );
   }
 
-  Future<void> _exportBackup() async {
+  Future<void> _manageTags() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, refresh) => AlertDialog(
+          title: const Text('Tags'),
+          content: SizedBox(
+            width: 420,
+            height: 420,
+            child: Column(
+              children: [
+                Expanded(
+                  child: _tags.isEmpty
+                      ? const Center(child: Text('Ainda não há tags.'))
+                      : ListView(
+                          children: _tags
+                              .map(
+                                (tag) => ListTile(
+                                  leading: const Icon(Icons.sell_outlined),
+                                  title: Text(tag),
+                                  trailing: PopupMenuButton<String>(
+                                    onSelected: (action) async {
+                                      if (action == 'edit') {
+                                        final edited = await showDialog<String>(
+                                          context: context,
+                                          builder: (_) => TagInputDialog(
+                                            initialTag: tag,
+                                            suggestions: _tags,
+                                          ),
+                                        );
+                                        if (edited == null || edited == tag)
+                                          return;
+                                        await _persistTags(
+                                          _tags
+                                              .where((item) => item != tag)
+                                              .followedBy([edited])
+                                              .toList(),
+                                        );
+                                        await _persist(
+                                          _expenses
+                                              .map(
+                                                (entry) => entry.copyWith(
+                                                  tags: entry.tags
+                                                      .map(
+                                                        (item) => item == tag
+                                                            ? edited
+                                                            : item,
+                                                      )
+                                                      .toSet()
+                                                      .toList(),
+                                                ),
+                                              )
+                                              .toList(),
+                                        );
+                                        refresh(() {});
+                                      } else if (action == 'remove') {
+                                        await _persist(
+                                          _expenses
+                                              .map(
+                                                (entry) => entry.copyWith(
+                                                  tags: entry.tags
+                                                      .where(
+                                                        (item) => item != tag,
+                                                      )
+                                                      .toList(),
+                                                ),
+                                              )
+                                              .toList(),
+                                        );
+                                        await _persistTags(
+                                          _tags
+                                              .where((item) => item != tag)
+                                              .toList(),
+                                        );
+                                        refresh(() {});
+                                      }
+                                    },
+                                    itemBuilder: (_) => const [
+                                      PopupMenuItem(
+                                        value: 'edit',
+                                        child: Text(
+                                          'Renomear em todos os lançamentos',
+                                        ),
+                                      ),
+                                      PopupMenuItem(
+                                        value: 'remove',
+                                        child: Text('Remover dos lançamentos'),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final created = await showDialog<String>(
+                      context: context,
+                      builder: (_) => TagInputDialog(suggestions: _tags),
+                    );
+                    if (created == null) return;
+                    await _persistTags([..._tags, created]);
+                    refresh(() {});
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Nova tag'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Concluir'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _exportCsv() async {
     try {
-      final contents = await _repository.exportBackup();
+      final contents = await _repository.exportCsv();
       await FileSaver.instance.saveAs(
-        name: 'controle_gastos_backup',
+        name: 'controle_gastos',
         bytes: Uint8List.fromList(utf8.encode(contents)),
-        fileExtension: 'json',
-        mimeType: MimeType.json,
+        fileExtension: 'csv',
+        mimeType: MimeType.csv,
       );
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Backup exportado.')));
+            .showSnackBar(const SnackBar(content: Text('CSV exportado.')));
       }
     } catch (_) {
       if (mounted) {
@@ -1119,22 +1523,21 @@ class _ExpenseHomeState extends State<ExpenseHome> {
     }
   }
 
-  Future<void> _importBackup() async {
+  Future<void> _importCsv() async {
     try {
       final file = await openFile(
         acceptedTypeGroups: [
-          const XTypeGroup(label: 'Backup JSON', extensions: ['json']),
+          const XTypeGroup(label: 'Arquivo CSV', extensions: ['csv']),
         ],
       );
       if (file == null) return;
-      final backup = _repository.decodeBackup(
-        utf8.decode(await file.readAsBytes()),
-      );
+      final contents = utf8.decode(await file.readAsBytes());
+      final backup = _repository.decodeCsv(contents);
       if (!mounted) return;
       final mode = await showDialog<bool?>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Importar backup'),
+          title: const Text('Importar arquivo'),
           content: Text(
             '${backup.entries.length} movimentos, ${backup.categories.length} categorias personalizadas e ${backup.recurringRules.length} recorrências. Escolha como importar.',
           ),
@@ -1159,7 +1562,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
       await _load();
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Backup importado.')));
+            .showSnackBar(const SnackBar(content: Text('Arquivo importado.')));
       }
     } on FormatException catch (error) {
       if (mounted) {
@@ -1260,21 +1663,35 @@ class _ExpenseHomeState extends State<ExpenseHome> {
     ),
   );
 
-  Widget _expenseTile(Expense expense, {bool actions = false}) {
+  Widget _expenseTile(
+    Expense expense, {
+    bool actions = false,
+    bool selectionMode = false,
+    bool selected = false,
+    VoidCallback? onSelect,
+  }) {
     final category = categoryFor(expense.categoryId, _categories);
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-        leading: _categoryIcon(category),
+        leading: selectionMode
+            ? Checkbox(value: selected, onChanged: (_) => onSelect?.call())
+            : _categoryIcon(category),
+        onTap: selectionMode ? onSelect : null,
         title: Text(
           expense.description,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
-        subtitle: Text(
-          '${category.label} · ${_dateFormat.format(expense.spentAt)}',
+        subtitle: Wrap(
+          spacing: 5,
+          runSpacing: -6,
+          children: [
+            Text('${category.label} · ${_dateFormat.format(expense.spentAt)}'),
+            ...expense.tags.map(_tagBadge),
+          ],
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1303,6 +1720,37 @@ class _ExpenseHomeState extends State<ExpenseHome> {
       ),
     );
   }
+
+  Widget _tagBadge(String tag) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.primary.withValues(alpha: .09),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: .16),
+      ),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.sell_outlined,
+          size: 12,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+        const SizedBox(width: 4),
+        Text(
+          tag,
+          style: TextStyle(
+            fontSize: 11,
+            height: 1.15,
+            fontWeight: FontWeight.w600,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+      ],
+    ),
+  );
 
   Widget _categoryIcon(ExpenseCategory category, {double size = 42}) =>
       Container(
@@ -1547,6 +1995,155 @@ class RecurringDialog extends StatefulWidget {
   State<RecurringDialog> createState() => _RecurringDialogState();
 }
 
+class TagPairDialog extends StatefulWidget {
+  const TagPairDialog({super.key, this.initialKey, this.initialValue});
+  final String? initialKey;
+  final String? initialValue;
+
+  @override
+  State<TagPairDialog> createState() => _TagPairDialogState();
+}
+
+class _TagPairDialogState extends State<TagPairDialog> {
+  late final TextEditingController _name;
+  late final TextEditingController _value;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.initialKey ?? '');
+    _value = TextEditingController(text: widget.initialValue ?? '');
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _value.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(widget.initialKey == null ? 'Adicionar tag' : 'Editar tag'),
+    content: SizedBox(
+      width: 360,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _name,
+            autofocus: true,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Nome',
+              hintText: 'Responsável, lugar, viagem…',
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _value,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Valor',
+              hintText: 'Ana, Mercado, Santiago…',
+            ),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancelar'),
+      ),
+      FilledButton(
+        onPressed: () {
+          final name = _name.text.trim();
+          final value = _value.text.trim();
+          if (name.isNotEmpty && value.isNotEmpty)
+            Navigator.pop(context, MapEntry(name, value));
+        },
+        child: const Text('Salvar'),
+      ),
+    ],
+  );
+}
+
+class TagInputDialog extends StatefulWidget {
+  const TagInputDialog({super.key, required this.suggestions, this.initialTag});
+  final List<String> suggestions;
+  final String? initialTag;
+  @override
+  State<TagInputDialog> createState() => _TagInputDialogState();
+}
+
+class _TagInputDialogState extends State<TagInputDialog> {
+  late final TextEditingController _tag;
+  @override
+  void initState() {
+    super.initState();
+    _tag = TextEditingController(text: widget.initialTag ?? '');
+  }
+
+  @override
+  void dispose() {
+    _tag.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(widget.initialTag == null ? 'Adicionar tag' : 'Renomear tag'),
+    content: SizedBox(
+      width: 380,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _tag,
+            autofocus: true,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Tag',
+              hintText: 'Ex.: SRS, Ana, Mercado ou Viagem Chile',
+            ),
+          ),
+          if (widget.suggestions.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text('Sugestões'),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              children: widget.suggestions
+                  .map(
+                    (tag) => ActionChip(
+                      label: Text(tag),
+                      onPressed: () => setState(() => _tag.text = tag),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ],
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancelar'),
+      ),
+      FilledButton(
+        onPressed: () {
+          final tag = _tag.text.trim();
+          if (tag.isNotEmpty) Navigator.pop(context, tag);
+        },
+        child: const Text('Salvar'),
+      ),
+    ],
+  );
+}
+
 class _RecurringDialogState extends State<RecurringDialog> {
   final _description = TextEditingController();
   final _amount = TextEditingController();
@@ -1597,7 +2194,7 @@ class _RecurringDialogState extends State<RecurringDialog> {
             SegmentedButton<EntryType>(
               segments: const [
                 ButtonSegment(value: EntryType.expense, label: Text('Despesa')),
-                ButtonSegment(value: EntryType.income, label: Text('Entrada')),
+                ButtonSegment(value: EntryType.income, label: Text('Receita')),
               ],
               selected: {_type},
               onSelectionChanged: (values) =>
@@ -1695,10 +2292,12 @@ class ExpenseDialog extends StatefulWidget {
     this.expense,
     required this.currency,
     required this.categories,
+    required this.knownTags,
   });
   final Expense? expense;
   final NumberFormat currency;
   final List<ExpenseCategory> categories;
+  final List<String> knownTags;
 
   @override
   State<ExpenseDialog> createState() => _ExpenseDialogState();
@@ -1708,11 +2307,13 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _description;
   late final TextEditingController _amount;
+  late final FocusNode _amountFocus;
   late DateTime _date;
   late String _category;
   bool _manualCategory = false;
   bool _didChooseCategory = false;
   late EntryType _type;
+  late List<String> _tags;
 
   @override
   void initState() {
@@ -1724,9 +2325,11 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
           ? ''
           : (expense.amountCents / 100).toStringAsFixed(2).replaceAll('.', ','),
     );
+    _amountFocus = FocusNode()..addListener(_formatAmountOnBlur);
     _date = expense?.spentAt ?? DateTime.now();
     _category = expense?.categoryId ?? 'other';
     _type = expense?.type ?? EntryType.expense;
+    _tags = [...?expense?.tags];
     _manualCategory =
         expense?.categorizationMethod == CategorizationMethod.manual;
     _didChooseCategory = false;
@@ -1736,13 +2339,35 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
   void dispose() {
     _description.dispose();
     _amount.dispose();
+    _amountFocus.dispose();
     super.dispose();
+  }
+
+  void _formatAmountOnBlur() {
+    if (_amountFocus.hasFocus) return;
+    final cents = _parseCents(_amount.text);
+    if (cents == null) return;
+    final formatted = NumberFormat('#,##0.00', 'pt_BR').format(cents / 100);
+    if (_amount.text != formatted) {
+      _amount.value = TextEditingValue(
+        text: formatted,
+        selection: TextSelection.collapsed(offset: formatted.length),
+      );
+    }
   }
 
   void _descriptionChanged(String value) {
     if (_manualCategory || _didChooseCategory) return;
     final suggested = suggestCategory(value, widget.categories);
     if (suggested != null) setState(() => _category = suggested);
+  }
+
+  Future<void> _addTag() async {
+    final tag = await showDialog<String>(
+      context: context,
+      builder: (_) => TagInputDialog(suggestions: widget.knownTags),
+    );
+    if (tag != null) setState(() => _tags = {..._tags, tag}.toList());
   }
 
   int? _parseCents(String value) {
@@ -1752,7 +2377,9 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: Text(
-      widget.expense == null ? 'Novo lançamento' : 'Editar lançamento',
+      widget.expense == null
+          ? (_type == EntryType.income ? 'Nova receita' : 'Nova despesa')
+          : (_type == EntryType.income ? 'Editar receita' : 'Editar despesa'),
     ),
     content: SizedBox(
       width: 440,
@@ -1764,12 +2391,16 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
             children: [
               TextFormField(
                 controller: _amount,
+                focusNode: _amountFocus,
                 autofocus: true,
+                onChanged: (_) => setState(() {}),
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
-                decoration: const InputDecoration(
-                  labelText: 'Valor',
+                decoration: InputDecoration(
+                  labelText: _type == EntryType.income
+                      ? 'Valor recebido'
+                      : 'Valor da despesa',
                   prefixText: 'R\$  ',
                   prefixIcon: Icon(Icons.payments_outlined),
                 ),
@@ -1777,6 +2408,16 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
                     ? 'Informe um valor maior que zero'
                     : null,
               ),
+              if (_amountFocus.hasFocus && _parseCents(_amount.text) != null)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 4, right: 8),
+                    child: Text(
+                      'Valor: ${widget.currency.format(_parseCents(_amount.text)! / 100)}',
+                    ),
+                  ),
+                ),
               const SizedBox(height: 12),
               SegmentedButton<EntryType>(
                 segments: const [
@@ -1787,7 +2428,7 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
                   ),
                   ButtonSegment(
                     value: EntryType.income,
-                    label: Text('Entrada'),
+                    label: Text('Receita'),
                     icon: Icon(Icons.arrow_downward),
                   ),
                 ],
@@ -1835,10 +2476,49 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
                 }),
               ),
               const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Tags',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  ..._tags.map(
+                    (tag) => InputChip(
+                      label: Text(tag),
+                      onDeleted: () => setState(() => _tags.remove(tag)),
+                    ),
+                  ),
+                  ...widget.knownTags
+                      .where((tag) => !_tags.contains(tag))
+                      .map(
+                        (tag) => ActionChip(
+                          avatar: const Icon(Icons.add, size: 16),
+                          label: Text(tag),
+                          onPressed: () => setState(() => _tags.add(tag)),
+                        ),
+                      ),
+                  ActionChip(
+                    avatar: const Icon(Icons.add, size: 18),
+                    label: const Text('Nova tag'),
+                    onPressed: _addTag,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.calendar_today_outlined),
-                title: const Text('Data da despesa'),
+                title: Text(
+                  _type == EntryType.income
+                      ? 'Data do recebimento'
+                      : 'Data da despesa',
+                ),
                 subtitle: Text(DateFormat('dd/MM/yyyy', 'pt_BR').format(_date)),
                 trailing: const Icon(Icons.edit_calendar_outlined),
                 onTap: () async {
@@ -1862,7 +2542,12 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
         onPressed: () => Navigator.pop(context),
         child: const Text('Cancelar'),
       ),
-      FilledButton(onPressed: _save, child: const Text('Salvar lançamento')),
+      FilledButton(
+        onPressed: _save,
+        child: Text(
+          _type == EntryType.income ? 'Salvar receita' : 'Salvar despesa',
+        ),
+      ),
     ],
   );
 
@@ -1878,6 +2563,7 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
         categoryId: _category,
         spentAt: _date,
         type: _type,
+        tags: _tags,
         source: previous?.source ?? ExpenseSource.manual,
         categorizationMethod: _manualCategory || _didChooseCategory
             ? CategorizationMethod.manual

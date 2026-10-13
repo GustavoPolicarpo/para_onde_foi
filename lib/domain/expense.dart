@@ -17,6 +17,7 @@ class Expense {
     this.source = ExpenseSource.manual,
     this.categorizationMethod = CategorizationMethod.manual,
     this.recurrenceId,
+    this.tags = const [],
   });
 
   final String id;
@@ -28,6 +29,7 @@ class Expense {
   final ExpenseSource source;
   final CategorizationMethod categorizationMethod;
   final String? recurrenceId;
+  final List<String> tags;
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -39,6 +41,7 @@ class Expense {
     'source': source.name,
     'categorizationMethod': categorizationMethod.name,
     'recurrenceId': recurrenceId,
+    'tags': tags,
   };
 
   factory Expense.fromJson(Map<String, dynamic> json) => Expense(
@@ -60,7 +63,38 @@ class Expense {
       orElse: () => CategorizationMethod.manual,
     ),
     recurrenceId: json['recurrenceId'] as String?,
+    tags: _decodeTags(json['tags']),
   );
+
+  Expense copyWith({
+    int? amountCents,
+    String? description,
+    String? categoryId,
+    DateTime? spentAt,
+    EntryType? type,
+    ExpenseSource? source,
+    CategorizationMethod? categorizationMethod,
+    String? recurrenceId,
+    List<String>? tags,
+  }) => Expense(
+    id: id,
+    amountCents: amountCents ?? this.amountCents,
+    description: description ?? this.description,
+    categoryId: categoryId ?? this.categoryId,
+    spentAt: spentAt ?? this.spentAt,
+    type: type ?? this.type,
+    source: source ?? this.source,
+    categorizationMethod: categorizationMethod ?? this.categorizationMethod,
+    recurrenceId: recurrenceId ?? this.recurrenceId,
+    tags: tags ?? this.tags,
+  );
+}
+
+List<String> _decodeTags(Object? raw) {
+  return (raw as List<dynamic>)
+      .map((value) => value.toString())
+      .toSet()
+      .toList();
 }
 
 class ExpenseCategory {
