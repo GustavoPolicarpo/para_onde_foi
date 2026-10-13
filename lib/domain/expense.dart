@@ -2,6 +2,10 @@ enum ExpenseSource { manual, autoRule, openFinance }
 
 enum CategorizationMethod { manual, automatic }
 
+enum EntryType { expense, income }
+
+enum RecurrenceFrequency { weekly, monthly, yearly }
+
 class Expense {
   const Expense({
     required this.id,
@@ -9,8 +13,10 @@ class Expense {
     required this.description,
     required this.categoryId,
     required this.spentAt,
+    this.type = EntryType.expense,
     this.source = ExpenseSource.manual,
     this.categorizationMethod = CategorizationMethod.manual,
+    this.recurrenceId,
   });
 
   final String id;
@@ -18,8 +24,10 @@ class Expense {
   final String description;
   final String categoryId;
   final DateTime spentAt;
+  final EntryType type;
   final ExpenseSource source;
   final CategorizationMethod categorizationMethod;
+  final String? recurrenceId;
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -27,8 +35,10 @@ class Expense {
     'description': description,
     'categoryId': categoryId,
     'spentAt': spentAt.toIso8601String(),
+    'type': type.name,
     'source': source.name,
     'categorizationMethod': categorizationMethod.name,
+    'recurrenceId': recurrenceId,
   };
 
   factory Expense.fromJson(Map<String, dynamic> json) => Expense(
@@ -37,6 +47,10 @@ class Expense {
     description: json['description'] as String,
     categoryId: json['categoryId'] as String,
     spentAt: DateTime.parse(json['spentAt'] as String),
+    type: EntryType.values.firstWhere(
+      (value) => value.name == json['type'],
+      orElse: () => EntryType.expense,
+    ),
     source: ExpenseSource.values.firstWhere(
       (value) => value.name == json['source'],
       orElse: () => ExpenseSource.manual,
@@ -45,15 +59,94 @@ class Expense {
       (value) => value.name == json['categorizationMethod'],
       orElse: () => CategorizationMethod.manual,
     ),
+    recurrenceId: json['recurrenceId'] as String?,
   );
 }
 
 class ExpenseCategory {
-  const ExpenseCategory(this.id, this.label, this.icon, this.colorValue);
+  const ExpenseCategory(
+    this.id,
+    this.label,
+    this.icon,
+    this.colorValue, {
+    this.archived = false,
+    this.isCustom = false,
+  });
   final String id;
   final String label;
   final String icon;
   final int colorValue;
+  final bool archived;
+  final bool isCustom;
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'label': label,
+    'icon': icon,
+    'colorValue': colorValue,
+    'archived': archived,
+    'isCustom': isCustom,
+  };
+
+  factory ExpenseCategory.fromJson(Map<String, dynamic> json) =>
+      ExpenseCategory(
+        json['id'] as String,
+        json['label'] as String,
+        json['icon'] as String? ?? 'more_horiz',
+        json['colorValue'] as int? ?? 0xFF8D929B,
+        archived: json['archived'] as bool? ?? false,
+        isCustom: true,
+      );
+}
+
+class RecurringRule {
+  const RecurringRule({
+    required this.id,
+    required this.description,
+    required this.amountCents,
+    required this.categoryId,
+    required this.type,
+    required this.frequency,
+    required this.nextDue,
+    this.active = true,
+  });
+
+  final String id;
+  final String description;
+  final int amountCents;
+  final String categoryId;
+  final EntryType type;
+  final RecurrenceFrequency frequency;
+  final DateTime nextDue;
+  final bool active;
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'description': description,
+    'amountCents': amountCents,
+    'categoryId': categoryId,
+    'type': type.name,
+    'frequency': frequency.name,
+    'nextDue': nextDue.toIso8601String(),
+    'active': active,
+  };
+
+  factory RecurringRule.fromJson(Map<String, dynamic> json) => RecurringRule(
+    id: json['id'] as String,
+    description: json['description'] as String,
+    amountCents: json['amountCents'] as int,
+    categoryId: json['categoryId'] as String,
+    type: EntryType.values.firstWhere(
+      (v) => v.name == json['type'],
+      orElse: () => EntryType.expense,
+    ),
+    frequency: RecurrenceFrequency.values.firstWhere(
+      (v) => v.name == json['frequency'],
+      orElse: () => RecurrenceFrequency.monthly,
+    ),
+    nextDue: DateTime.parse(json['nextDue'] as String),
+    active: json['active'] as bool? ?? true,
+  );
 }
 
 const expenseCategories = <ExpenseCategory>[
@@ -67,12 +160,18 @@ const expenseCategories = <ExpenseCategory>[
   ExpenseCategory('other', 'Outros', 'more_horiz', 0xFF8D929B),
 ];
 
-ExpenseCategory categoryFor(String id) => expenseCategories.firstWhere(
+ExpenseCategory categoryFor(
+  String id, [
+  List<ExpenseCategory> categories = expenseCategories,
+]) => categories.firstWhere(
   (category) => category.id == id,
   orElse: () => expenseCategories.last,
 );
 
-String? suggestCategory(String description) {
+String? suggestCategory(
+  String description, [
+  List<ExpenseCategory> categories = expenseCategories,
+]) {
   final text = description.toLowerCase();
   const rules = <String, List<String>>{
     'food': [
@@ -115,7 +214,12 @@ String? suggestCategory(String description) {
     'bills': ['fatura', 'conta', 'telefone', 'luz'],
   };
   for (final entry in rules.entries) {
-    if (entry.value.any(text.contains)) return entry.key;
+    if (entry.value.any(text.contains) &&
+        categories.any(
+          (category) => category.id == entry.key && !category.archived,
+        )) {
+      return entry.key;
+    }
   }
   return null;
 }
