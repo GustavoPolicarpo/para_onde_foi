@@ -27,7 +27,7 @@ Entregar um app pessoal para Android e web focado em registrar despesas e entend
 
 1. Cadastro, edição e exclusão de despesa.
 2. Categorias iniciais e escolha manual de categoria.
-3. Regras automáticas simples por trecho de descrição, com prioridade determinística e possibilidade de correção manual.
+3. Sugestão de categoria a partir da última categoria usada para a mesma descrição.
 4. Início com total do mês e despesas recentes.
 5. Lista de despesas com filtro por mês e categoria.
 6. Relatório mensal por categoria.
@@ -39,10 +39,10 @@ Sincronização, login, metas e Open Finance continuam fora do escopo atual. O a
 
 - Navegação responsiva entre Início, Despesas e Relatórios.
 - Inclusão, edição e exclusão de despesas; valores são guardados em centavos.
-- Categorias predefinidas e sugestão automática por palavras na descrição, com escolha manual disponível.
+- Categorias predefinidas e sugestão pela última categoria usada na mesma descrição, com escolha manual disponível.
 - Seletor de mês, filtro por categoria, resumo mensal e totais por categoria.
 - Persistência local via `shared_preferences` em Android e web.
-- Categorias editáveis/arquiváveis, busca e filtros, recorrências confirmadas pelo usuário, orçamentos mensais e importação/exportação CSV.
+- Categorias editáveis/arquiváveis, busca por descrição e notas, filtros por período/categoria/tags, parcelas mensais processadas ao abrir o app, notas opcionais, orçamentos mensais e importação/exportação CSV.
 
 ## Próximas tarefas, em ordem
 
@@ -83,13 +83,13 @@ Sincronização, login, metas e Open Finance continuam fora do escopo atual. O a
 
 - **Controle de despesas:** resumir gastos por mês e acompanhar totais por categoria, mantendo o cadastro focado em despesas.
 - **Categorias próprias:** criar, renomear, arquivar e escolher ícone/cor; impedir que despesas existentes percam sua categoria.
-- **Busca e filtros:** pesquisar descrição e filtrar por intervalo de datas, categoria e tipo.
-- **Recorrências:** definir periodicidade e próxima ocorrência, com revisão clara antes de criar lançamentos futuros.
+- **Busca e filtros:** pesquisar descrição e notas e filtrar por intervalo de datas, categoria e tags.
+- **Parcelas mensais:** definir o total de parcelas (incluindo a despesa inicial) e processar parcelas vencidas ao abrir o app ou atualizar a página; editar ou excluir uma série existente.
 - **Orçamento:** definir teto mensal por categoria e mostrar valor usado e restante.
 - **Exportação/backup:** exportar e importar os dados antes de oferecer continuidade entre dispositivos; validar arquivo e evitar duplicatas na importação.
 - Critério de conclusão: o uso diário do app não depende do widget e os dados podem ser recuperados pelo usuário.
 
-Implementado nesta etapa: categorias personalizáveis/arquiváveis, busca e filtros por período/categoria/tags, recorrências com confirmação manual, limites mensais por categoria e importação/exportação CSV.
+Implementado nesta etapa: categorias personalizáveis/arquiváveis, busca e filtros por período/categoria/tags, parcelas mensais registradas ao abrir o app, limites mensais por categoria e importação/exportação CSV.
 
 ### 7. Planejar e construir o widget Android — concluída
 

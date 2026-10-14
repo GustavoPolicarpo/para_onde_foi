@@ -15,9 +15,48 @@ import 'domain/expense.dart';
 const _widgetChannel = MethodChannel('gasto_claro/widget');
 final _expenseHomeKey = GlobalKey<_ExpenseHomeState>();
 
+const _categoryIconOptions = <(String, String, IconData)>[
+  ('restaurant', 'Restaurante', Icons.restaurant_outlined),
+  ('local_grocery_store', 'Mercado', Icons.local_grocery_store_outlined),
+  ('bakery_dining', 'Padaria', Icons.bakery_dining_outlined),
+  ('fastfood', 'Lanche', Icons.fastfood_outlined),
+  ('home', 'Casa', Icons.home_outlined),
+  ('apartment', 'Apartamento', Icons.apartment_outlined),
+  ('lightbulb', 'Energia', Icons.lightbulb_outline),
+  ('water_drop', 'Água', Icons.water_drop_outlined),
+  ('directions_car', 'Carro', Icons.directions_car_outlined),
+  ('train', 'Transporte público', Icons.train_outlined),
+  ('local_gas_station', 'Combustível', Icons.local_gas_station_outlined),
+  ('medical_services', 'Saúde', Icons.medical_services_outlined),
+  ('favorite', 'Saúde', Icons.favorite_outline),
+  ('fitness_center', 'Exercícios', Icons.fitness_center),
+  ('movie', 'Cinema', Icons.movie_outlined),
+  ('sports_soccer', 'Esportes', Icons.sports_soccer_outlined),
+  ('shopping_bag', 'Compras', Icons.shopping_bag_outlined),
+  ('checkroom', 'Roupas', Icons.checkroom_outlined),
+  ('receipt_long', 'Contas', Icons.receipt_long_outlined),
+  ('payments', 'Pagamentos', Icons.payments_outlined),
+  ('pets', 'Pets', Icons.pets_outlined),
+  ('school', 'Educação', Icons.school_outlined),
+  ('flight', 'Viagem', Icons.flight_outlined),
+  ('wifi', 'Internet', Icons.wifi),
+  ('phone_android', 'Celular', Icons.phone_android),
+  ('work', 'Trabalho', Icons.work_outline),
+  ('card_giftcard', 'Presentes', Icons.card_giftcard),
+  ('more_horiz', 'Outros', Icons.more_horiz),
+];
+
+IconData _categoryIconData(String name) => _categoryIconOptions
+    .firstWhere(
+      (option) => option.$1 == name,
+      orElse: () => _categoryIconOptions.last,
+    )
+    .$3;
+
 Future<void> _syncWidgetSummary(
   List<Expense> expenses,
   Map<String, int> budgets,
+  List<ExpenseCategory> categories,
   NumberFormat currency,
 ) async {
   final now = DateTime.now();
@@ -29,28 +68,25 @@ Future<void> _syncWidgetSummary(
     0,
     (sum, entry) => sum + entry.amountCents,
   );
-  final totalBudgetCents = budgets.values.fold<int>(
-    0,
-    (sum, value) => sum + value,
-  );
-  final budgetedSpendCents = monthExpenses
-      .where((entry) => budgets.containsKey(entry.categoryId))
-      .fold<int>(0, (sum, entry) => sum + entry.amountCents);
-  final budgetDifference = totalBudgetCents - budgetedSpendCents;
-  final budgetStatus = totalBudgetCents == 0
-      ? 'Configure limites para acompanhar os orçamentos'
-      : budgetDifference < 0
-      ? '${currency.format(-budgetDifference / 100)} acima dos limites'
-      : '${currency.format(budgetDifference / 100)} disponíveis nos orçamentos';
+  final budgetRows = budgets.entries.map((budget) {
+    final spent = monthExpenses
+        .where((entry) => entry.categoryId == budget.key)
+        .fold<int>(0, (sum, entry) => sum + entry.amountCents);
+    return {
+      'label': categoryFor(budget.key, categories).label,
+      'spent': currency.format(spent / 100),
+      'limit': currency.format(budget.value / 100),
+      'progress': budget.value == 0
+          ? 0
+          : ((spent * 100) ~/ budget.value).clamp(0, 100),
+      'over': spent > budget.value,
+    };
+  }).toList();
   try {
     await _widgetChannel.invokeMethod<void>('updateWidgetSummary', {
       'month': DateFormat('MMMM', 'pt_BR').format(now),
       'amount': currency.format(totalCents / 100),
-      'budgetStatus': budgetStatus,
-      'budgetProgress': totalBudgetCents == 0
-          ? 0
-          : ((budgetedSpendCents * 100) ~/ totalBudgetCents).clamp(0, 100),
-      'hasBudget': totalBudgetCents > 0,
+      'budgets': jsonEncode(budgetRows),
     });
   } on MissingPluginException {
     // Web and non-Android builds don't have the Android home widget.
@@ -170,6 +206,7 @@ class _QuickEntryHostState extends State<QuickEntryHost> {
   final _repository = ExpenseRepository();
   final _currency = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
   List<ExpenseCategory> _categories = expenseCategories;
+  List<Expense> _history = [];
   List<String> _tags = [];
   bool _opened = false;
 
@@ -180,8 +217,10 @@ class _QuickEntryHostState extends State<QuickEntryHost> {
   }
 
   Future<void> _prepare() async {
+    await _applyDueRecurringExpenses(_repository);
     final customCategories = await _repository.loadCategories();
     final tags = await _repository.loadTags();
+    final history = await _repository.load();
     final categoryMap = {
       for (final category in expenseCategories) category.id: category,
       for (final category in customCategories) category.id: category,
@@ -189,6 +228,7 @@ class _QuickEntryHostState extends State<QuickEntryHost> {
     if (!mounted) return;
     setState(() {
       _categories = categoryMap.values.toList();
+      _history = history;
       _tags = tags;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _openForm());
@@ -197,7 +237,7 @@ class _QuickEntryHostState extends State<QuickEntryHost> {
   Future<void> _openForm() async {
     if (_opened || !mounted) return;
     _opened = true;
-    final result = await showDialog<Expense>(
+    final result = await showDialog<ExpenseFormResult>(
       context: context,
       barrierDismissible: false,
       builder: (_) => ExpenseDialog(
@@ -205,6 +245,7 @@ class _QuickEntryHostState extends State<QuickEntryHost> {
         currency: _currency,
         categories: _categories,
         knownTags: _tags,
+        history: _history,
       ),
     );
     if (!mounted) return;
@@ -213,14 +254,18 @@ class _QuickEntryHostState extends State<QuickEntryHost> {
       return;
     }
     try {
-      final quickEntry = result.copyWith(spentAt: DateTime.now());
+      final quickEntry = result.expense.copyWith(spentAt: DateTime.now());
       final entries = await _repository.load();
       entries.add(quickEntry);
       entries.sort((a, b) => b.spentAt.compareTo(a.spentAt));
       await _repository.saveAll(entries);
       await _repository.saveTags({..._tags, ...quickEntry.tags}.toList());
+      if (result.recurringRule != null) {
+        final rules = await _repository.loadRecurringRules();
+        await _repository.saveRecurringRules([...rules, result.recurringRule!]);
+      }
       final budgets = await _repository.loadBudgets();
-      await _syncWidgetSummary(entries, budgets, _currency);
+      await _syncWidgetSummary(entries, budgets, _categories, _currency);
       await _widgetChannel.invokeMethod<void>('finishQuickEntry', true);
     } catch (_) {
       if (mounted) {
@@ -291,6 +336,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
     if (_refreshInProgress) return;
     _refreshInProgress = true;
     try {
+      await _applyDueRecurringExpenses(_repository);
       final expenses = await _repository.load();
       final customCategories = await _repository.loadCategories();
       final budgets = await _repository.loadBudgets();
@@ -315,7 +361,12 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
         }
         _loading = false;
       });
-      await _syncWidgetSummary(expenses, budgets, _currency);
+      await _syncWidgetSummary(
+        expenses,
+        budgets,
+        categoryMap.values.toList(),
+        _currency,
+      );
     } finally {
       _refreshInProgress = false;
     }
@@ -336,7 +387,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
     next.sort((a, b) => b.spentAt.compareTo(a.spentAt));
     await _repository.saveAll(next);
     if (mounted) setState(() => _expenses = next);
-    await _syncWidgetSummary(next, _budgets, _currency);
+    await _syncWidgetSummary(next, _budgets, _categories, _currency);
   }
 
   Future<void> _persistCategories(List<ExpenseCategory> next) async {
@@ -357,7 +408,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
   Future<void> _persistBudgets(Map<String, int> next) async {
     await _repository.saveBudgets(next);
     if (mounted) setState(() => _budgets = next);
-    await _syncWidgetSummary(_expenses, next, _currency);
+    await _syncWidgetSummary(_expenses, next, _categories, _currency);
   }
 
   Future<void> _persistRecurring(List<RecurringRule> next) async {
@@ -366,25 +417,40 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
   }
 
   Future<void> _openExpense({Expense? expense}) async {
-    final result = await showDialog<Expense>(
+    final result = await showDialog<ExpenseFormResult>(
       context: context,
       builder: (_) => ExpenseDialog(
         expense: expense,
         currency: _currency,
         categories: _categories,
         knownTags: _tags,
+        history: _expenses,
       ),
     );
     if (result == null) return;
+    final savedExpense = result.expense;
     final next = [..._expenses];
-    final index = next.indexWhere((item) => item.id == result.id);
+    final index = next.indexWhere((item) => item.id == savedExpense.id);
     if (index < 0) {
-      next.add(result);
+      next.add(savedExpense);
     } else {
-      next[index] = result;
+      next[index] = savedExpense;
     }
-    await _persistTags({..._tags, ...result.tags}.toList());
-    await _persist(next);
+    if (result.recurringRule != null) {
+      await _persistRecurring([..._recurringRules, result.recurringRule!]);
+    }
+    final nextTags = {..._tags, ...savedExpense.tags}.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    next.sort((a, b) => b.spentAt.compareTo(a.spentAt));
+    await _repository.saveTags(nextTags);
+    await _repository.saveAll(next);
+    if (mounted) {
+      setState(() {
+        _tags = nextTags;
+        _expenses = next;
+      });
+    }
+    await _syncWidgetSummary(next, _budgets, _categories, _currency);
   }
 
   Future<void> _persistTags(List<String> next) async {
@@ -452,6 +518,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
             (entry) => _selectedIds.contains(entry.id)
                 ? entry.copyWith(
                     categoryId: categoryId,
+                    categorySetAt: DateTime.now(),
                     categorizationMethod: CategorizationMethod.manual,
                   )
                 : entry,
@@ -465,7 +532,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
     if (_selectedIds.isEmpty) return;
     final tag = await showDialog<String>(
       context: context,
-      builder: (_) => TagInputDialog(suggestions: _tags),
+      builder: (_) => const TagInputDialog(),
     );
     if (tag == null) return;
     await _persistTags([..._tags, tag]);
@@ -714,7 +781,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
               (expense) =>
                   (_categoryFilter == null ||
                       expense.categoryId == _categoryFilter) &&
-                  ('${expense.description} ${expense.tags.join(' ')}')
+                  ('${expense.description} ${expense.notes ?? ''} ${expense.tags.join(' ')}')
                       .toLowerCase()
                       .contains(_searchController.text.trim().toLowerCase()) &&
                   _movementTagFilters.every(expense.tags.contains) &&
@@ -1021,6 +1088,16 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
                   final category = !_reportGroupByTags
                       ? categoryFor(entry.key, _categories)
                       : null;
+                  final budgetLimit =
+                      category == null ? null : _budgets[category.id];
+                  final budgetSpent = category == null
+                      ? 0
+                      : _monthExpenses
+                            .where((item) => item.categoryId == category.id)
+                            .fold<int>(0, (sum, item) => sum + item.amountCents);
+                  final budgetRatio = budgetLimit == null || budgetLimit == 0
+                      ? null
+                      : budgetSpent / budgetLimit;
                   final ratio = filteredTotal == 0
                       ? 0.0
                       : entry.value / filteredTotal;
@@ -1054,6 +1131,18 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
                             ),
                           ],
                         ),
+                        if (budgetLimit != null && budgetRatio != null) ...[
+                          const SizedBox(height: 5),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Orçamento ${_currency.format(budgetLimit / 100)} · '
+                              '${_currency.format(budgetSpent / 100)} usado · '
+                              '${(budgetRatio * 100).round()}%',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 9),
                         ClipRRect(
                           borderRadius: BorderRadius.circular(5),
@@ -1217,16 +1306,12 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
         ),
       ),
       const SizedBox(height: 18),
-      _sectionHeading(
-        'Recorrências',
-        action: 'Adicionar',
-        onAction: _addRecurring,
-      ),
+      _sectionHeading('Recorrências', action: null),
       const SizedBox(height: 8),
       if (_recurringRules.isEmpty)
         _emptyState(
           'Nenhuma recorrência',
-          'Cadastre uma despesa periódica e confirme cada lançamento quando vencer.',
+          'Despesas parceladas cadastradas junto com um lançamento aparecem aqui.',
         ),
       ..._recurringRules.map(
         (rule) => Card(
@@ -1238,27 +1323,23 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             subtitle: Text(
-              '${rule.active ? 'Próxima' : 'Pausada'} · ${_dateFormat.format(rule.nextDue)} · ${_frequencyLabel(rule.frequency)}',
+              '${rule.completedInstallments >= rule.totalInstallments
+                  ? 'Concluída'
+                  : rule.active
+                  ? 'Próxima'
+                  : 'Pausada'} · ${_dateFormat.format(rule.nextDue)} · ${rule.completedInstallments}/${rule.totalInstallments} parcelas',
             ),
             trailing: PopupMenuButton<String>(
               onSelected: (value) async {
-                if (value == 'confirm') {
-                  await _confirmRecurring(rule);
+                if (value == 'edit') {
+                  await _editRecurring(rule);
                 }
                 if (value == 'toggle') {
                   await _persistRecurring(
                     _recurringRules
                         .map(
                           (item) => item.id == rule.id
-                              ? RecurringRule(
-                                  id: item.id,
-                                  description: item.description,
-                                  amountCents: item.amountCents,
-                                  categoryId: item.categoryId,
-                                  frequency: item.frequency,
-                                  nextDue: item.nextDue,
-                                  active: !item.active,
-                                )
+                              ? item.copyWith(active: !item.active)
                               : item,
                         )
                         .toList(),
@@ -1273,22 +1354,19 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
                 }
               },
               itemBuilder: (_) => [
-                if (rule.active)
-                  const PopupMenuItem(
-                    value: 'confirm',
-                    child: Text('Confirmar lançamento'),
+                const PopupMenuItem(value: 'edit', child: Text('Editar')),
+                if (rule.completedInstallments < rule.totalInstallments)
+                  PopupMenuItem(
+                    value: 'toggle',
+                    child: Text(rule.active ? 'Pausar' : 'Retomar'),
                   ),
-                PopupMenuItem(
-                  value: 'toggle',
-                  child: Text(rule.active ? 'Pausar' : 'Retomar'),
-                ),
                 const PopupMenuItem(
                   value: 'delete',
                   child: Text('Excluir recorrência'),
                 ),
               ],
             ),
-            onTap: () => _showRecurringDetail(rule),
+            onTap: () => _editRecurring(rule),
           ),
         ),
       ),
@@ -1322,91 +1400,21 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
     ],
   );
 
-  String _frequencyLabel(RecurrenceFrequency frequency) => switch (frequency) {
-    RecurrenceFrequency.weekly => 'Toda semana',
-    RecurrenceFrequency.monthly => 'Todo mês',
-    RecurrenceFrequency.yearly => 'Todo ano',
-  };
-
-  DateTime _advanceDate(DateTime date, RecurrenceFrequency frequency) =>
-      switch (frequency) {
-        RecurrenceFrequency.weekly => date.add(const Duration(days: 7)),
-        RecurrenceFrequency.monthly => DateTime(
-          date.year,
-          date.month + 1,
-          date.day.clamp(1, DateTime(date.year, date.month + 2, 0).day),
-        ),
-        RecurrenceFrequency.yearly => DateTime(
-          date.year + 1,
-          date.month,
-          date.day.clamp(1, DateTime(date.year + 1, date.month + 1, 0).day),
-        ),
-      };
-
-  Future<void> _confirmRecurring(RecurringRule rule) async {
-    final exists = _expenses.any(
-      (entry) =>
-          entry.recurrenceId == rule.id &&
-          entry.spentAt.year == rule.nextDue.year &&
-          entry.spentAt.month == rule.nextDue.month &&
-          entry.spentAt.day == rule.nextDue.day,
-    );
-    if (!exists) {
-      await _persist([
-        ..._expenses,
-        Expense(
-          id: DateTime.now().microsecondsSinceEpoch.toString(),
-          amountCents: rule.amountCents,
-          description: rule.description,
-          categoryId: rule.categoryId,
-          spentAt: rule.nextDue,
-          recurrenceId: rule.id,
-        ),
-      ]);
-    }
-    await _persistRecurring(
-      _recurringRules
-          .map(
-            (item) => item.id == rule.id
-                ? RecurringRule(
-                    id: item.id,
-                    description: item.description,
-                    amountCents: item.amountCents,
-                    categoryId: item.categoryId,
-                    frequency: item.frequency,
-                    nextDue: _advanceDate(item.nextDue, item.frequency),
-                    active: item.active,
-                  )
-                : item,
-          )
-          .toList(),
-    );
-  }
-
-  Future<void> _addRecurring() async {
-    final rule = await showDialog<RecurringRule>(
+  Future<void> _editRecurring(RecurringRule rule) async {
+    final updated = await showDialog<RecurringRule>(
       context: context,
       builder: (_) =>
-          RecurringDialog(categories: _categories, currency: _currency),
-    );
-    if (rule != null) await _persistRecurring([..._recurringRules, rule]);
-  }
-
-  Future<void> _showRecurringDetail(RecurringRule rule) async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(rule.description),
-        content: Text(
-          'Despesa de ${_currency.format(rule.amountCents / 100)} · ${_frequencyLabel(rule.frequency)}\nPróximo vencimento: ${_dateFormat.format(rule.nextDue)}\nO app não lança automaticamente; confirme para criar o movimento.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Fechar'),
+          RecurringRuleEditDialog(
+            rule: rule,
+            categories: _categories,
+            knownTags: _tags,
           ),
-        ],
-      ),
+    );
+    if (updated == null) return;
+    await _persistRecurring(
+      _recurringRules
+          .map((item) => item.id == rule.id ? updated : item)
+          .toList(),
     );
   }
 
@@ -1564,10 +1572,8 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
                                       if (action == 'edit') {
                                         final edited = await showDialog<String>(
                                           context: context,
-                                          builder: (_) => TagInputDialog(
-                                            initialTag: tag,
-                                            suggestions: _tags,
-                                          ),
+                                          builder: (_) =>
+                                              TagInputDialog(initialTag: tag),
                                         );
                                         if (edited == null || edited == tag)
                                           return;
@@ -1639,7 +1645,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
                   onPressed: () async {
                     final created = await showDialog<String>(
                       context: context,
-                      builder: (_) => TagInputDialog(suggestions: _tags),
+                      builder: (_) => const TagInputDialog(),
                     );
                     if (created == null) return;
                     await _persistTags([..._tags, created]);
@@ -1832,9 +1838,11 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
     VoidCallback? onSelect,
   }) {
     final category = categoryFor(expense.categoryId, _categories);
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
+    return GestureDetector(
+      onDoubleTap: selectionMode ? null : () => _openExpense(expense: expense),
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
         leading: selectionMode
             ? Checkbox(value: selected, onChanged: (_) => onSelect?.call())
@@ -1852,6 +1860,13 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
           children: [
             Text('${category.label} · ${_dateFormat.format(expense.spentAt)}'),
             ...expense.tags.map(_tagBadge),
+            if (expense.notes?.trim().isNotEmpty == true)
+              Text(
+                expense.notes!.trim(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+              ),
           ],
         ),
         trailing: Row(
@@ -1872,6 +1887,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
                 ],
               ),
           ],
+        ),
         ),
       ),
     );
@@ -1924,28 +1940,89 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
       );
 
   IconData _iconFor(String name) => switch (name) {
-    'restaurant' => Icons.restaurant,
-    'home' => Icons.home_outlined,
-    'directions_car' => Icons.directions_car_outlined,
-    'favorite' => Icons.favorite_border,
-    'movie' => Icons.movie_outlined,
-    'shopping_bag' => Icons.shopping_bag_outlined,
-    'receipt_long' => Icons.receipt_long_outlined,
-    _ => Icons.more_horiz,
+    _ => _categoryIconData(name),
   };
 }
 
 int? _amountToCents(String value) {
-  var normalized = value.trim().replaceAll('R\$', '').replaceAll(' ', '');
-  if (normalized.contains(',')) {
-    normalized = normalized.replaceAll('.', '').replaceAll(',', '.');
-  } else if (normalized.contains('.')) {
-    final decimals = normalized.length - normalized.lastIndexOf('.') - 1;
-    if (decimals == 3) normalized = normalized.replaceAll('.', '');
+  final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
+  final cents = int.tryParse(digits);
+  if (cents == null || cents <= 0 || cents > 99999999999) return null;
+  return cents;
+}
+
+class CentavosInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) return const TextEditingValue(text: '');
+    final cents = int.tryParse(digits);
+    if (cents == null || cents > 99999999999) return oldValue;
+    final formatted = NumberFormat('#,##0.00', 'pt_BR').format(cents / 100);
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
   }
-  final amount = double.tryParse(normalized);
-  if (amount == null || amount <= 0 || amount > 999999999) return null;
-  return (amount * 100).round();
+}
+
+DateTime _advanceMonthly(DateTime date, {int? preferredDay}) {
+  final nextMonth = date.month + 1;
+  final lastDay = DateTime(date.year, nextMonth + 1, 0).day;
+  return DateTime(
+    date.year,
+    nextMonth,
+    (preferredDay ?? date.day).clamp(1, lastDay),
+  );
+}
+
+Future<void> _applyDueRecurringExpenses(ExpenseRepository repository) async {
+  final expenses = await repository.load();
+  final rules = await repository.loadRecurringRules();
+  final today = DateUtils.dateOnly(DateTime.now());
+  var changed = false;
+  for (var index = 0; index < rules.length; index++) {
+    final rule = rules[index];
+    if (!rule.active) continue;
+    var nextDue = DateUtils.dateOnly(rule.nextDue);
+    var completed = rule.completedInstallments;
+    while (completed < rule.totalInstallments && !nextDue.isAfter(today)) {
+      final expenseId = '${rule.id}_${DateFormat('yyyyMMdd').format(nextDue)}';
+      if (!expenses.any((entry) => entry.id == expenseId)) {
+        expenses.add(
+          Expense(
+            id: expenseId,
+            amountCents: rule.amountCents,
+            description: rule.description,
+            categoryId: rule.categoryId,
+            tags: rule.tags,
+            categorySetAt: nextDue,
+            spentAt: nextDue,
+            recurrenceId: rule.id,
+            source: ExpenseSource.autoRule,
+            categorizationMethod: CategorizationMethod.automatic,
+          ),
+        );
+      }
+      completed++;
+      nextDue = _advanceMonthly(nextDue, preferredDay: rule.dayOfMonth);
+      changed = true;
+    }
+    if (completed != rule.completedInstallments) {
+      rules[index] = rule.copyWith(
+        completedInstallments: completed,
+        nextDue: nextDue,
+        active: completed < rule.totalInstallments,
+      );
+    }
+  }
+  if (!changed) return;
+  expenses.sort((a, b) => b.spentAt.compareTo(a.spentAt));
+  await repository.saveAll(expenses);
+  await repository.saveRecurringRules(rules);
 }
 
 class MoneyLimitDialog extends StatefulWidget {
@@ -1987,7 +2064,8 @@ class _MoneyLimitDialogState extends State<MoneyLimitDialog> {
     title: Text('Limite · ${widget.category.label}'),
     content: TextField(
       controller: _amount,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      keyboardType: TextInputType.number,
+      inputFormatters: [CentavosInputFormatter()],
       decoration: const InputDecoration(
         labelText: 'Limite mensal',
         prefixText: 'R\$ ',
@@ -2069,19 +2147,31 @@ class _CategoryDialogState extends State<CategoryDialog> {
           DropdownButtonFormField<String>(
             initialValue: _icon,
             decoration: const InputDecoration(labelText: 'Ícone'),
-            items: const [
-              DropdownMenuItem(value: 'restaurant', child: Text('Alimentação')),
-              DropdownMenuItem(value: 'home', child: Text('Casa')),
-              DropdownMenuItem(
-                value: 'directions_car',
-                child: Text('Transporte'),
-              ),
-              DropdownMenuItem(value: 'favorite', child: Text('Saúde')),
-              DropdownMenuItem(value: 'movie', child: Text('Lazer')),
-              DropdownMenuItem(value: 'shopping_bag', child: Text('Compras')),
-              DropdownMenuItem(value: 'receipt_long', child: Text('Contas')),
-              DropdownMenuItem(value: 'more_horiz', child: Text('Outros')),
-            ],
+            selectedItemBuilder: (context) => _categoryIconOptions
+                .map(
+                  (option) => Row(
+                    children: [
+                      Icon(option.$3, size: 20),
+                      const SizedBox(width: 10),
+                      Text(option.$2),
+                    ],
+                  ),
+                )
+                .toList(),
+            items: _categoryIconOptions
+                .map(
+                  (option) => DropdownMenuItem(
+                    value: option.$1,
+                    child: Row(
+                      children: [
+                        Icon(option.$3, size: 20),
+                        const SizedBox(width: 10),
+                        Text(option.$2),
+                      ],
+                    ),
+                  ),
+                )
+                .toList(),
             onChanged: (value) => setState(() => _icon = value ?? _icon),
           ),
           const SizedBox(height: 12),
@@ -2137,18 +2227,6 @@ class _CategoryDialogState extends State<CategoryDialog> {
       ),
     ],
   );
-}
-
-class RecurringDialog extends StatefulWidget {
-  const RecurringDialog({
-    super.key,
-    required this.categories,
-    required this.currency,
-  });
-  final List<ExpenseCategory> categories;
-  final NumberFormat currency;
-  @override
-  State<RecurringDialog> createState() => _RecurringDialogState();
 }
 
 class TagPairDialog extends StatefulWidget {
@@ -2226,8 +2304,7 @@ class _TagPairDialogState extends State<TagPairDialog> {
 }
 
 class TagInputDialog extends StatefulWidget {
-  const TagInputDialog({super.key, required this.suggestions, this.initialTag});
-  final List<String> suggestions;
+  const TagInputDialog({super.key, this.initialTag});
   final String? initialTag;
   @override
   State<TagInputDialog> createState() => _TagInputDialogState();
@@ -2252,36 +2329,11 @@ class _TagInputDialogState extends State<TagInputDialog> {
     title: Text(widget.initialTag == null ? 'Adicionar tag' : 'Renomear tag'),
     content: SizedBox(
       width: 380,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            controller: _tag,
-            autofocus: true,
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(
-              labelText: 'Tag',
-              hintText: 'Ex.: SRS, Ana, Mercado ou Viagem Chile',
-            ),
-          ),
-          if (widget.suggestions.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Text('Sugestões'),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              children: widget.suggestions
-                  .map(
-                    (tag) => ActionChip(
-                      label: Text(tag),
-                      onPressed: () => setState(() => _tag.text = tag),
-                    ),
-                  )
-                  .toList(),
-            ),
-          ],
-        ],
+      child: TextField(
+        controller: _tag,
+        autofocus: true,
+        textCapitalization: TextCapitalization.words,
+        decoration: const InputDecoration(labelText: 'Tag'),
       ),
     ),
     actions: [
@@ -2300,134 +2352,196 @@ class _TagInputDialogState extends State<TagInputDialog> {
   );
 }
 
-class _RecurringDialogState extends State<RecurringDialog> {
-  final _description = TextEditingController();
-  final _amount = TextEditingController();
-  RecurrenceFrequency _frequency = RecurrenceFrequency.monthly;
-  DateTime _nextDue = DateTime.now();
+class RecurringRuleEditDialog extends StatefulWidget {
+  const RecurringRuleEditDialog({
+    super.key,
+    required this.rule,
+    required this.categories,
+    required this.knownTags,
+  });
+
+  final RecurringRule rule;
+  final List<ExpenseCategory> categories;
+  final List<String> knownTags;
+
+  @override
+  State<RecurringRuleEditDialog> createState() =>
+      _RecurringRuleEditDialogState();
+}
+
+class _RecurringRuleEditDialogState extends State<RecurringRuleEditDialog> {
+  late final TextEditingController _description;
+  late final TextEditingController _amount;
+  late final TextEditingController _installments;
   late String _category;
+  late DateTime _nextDue;
+  late List<String> _tags;
+
   @override
   void initState() {
     super.initState();
-    _category = widget.categories
-        .firstWhere((category) => !category.archived)
-        .id;
+    final rule = widget.rule;
+    _description = TextEditingController(text: rule.description);
+    _amount = TextEditingController(
+      text: (rule.amountCents / 100).toStringAsFixed(2).replaceAll('.', ','),
+    );
+    _installments = TextEditingController(text: '${rule.totalInstallments}');
+    _category = rule.categoryId;
+    _nextDue = rule.nextDue;
+    _tags = [...rule.tags];
   }
 
   @override
   void dispose() {
     _description.dispose();
     _amount.dispose();
+    _installments.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Nova recorrência'),
-    content: SizedBox(
-      width: 440,
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _description,
-              decoration: const InputDecoration(labelText: 'Descrição'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _amount,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
+  Widget build(BuildContext context) {
+    final firstAllowed = widget.rule.completedInstallments < 2
+        ? 2
+        : widget.rule.completedInstallments;
+    final lastAllowed = widget.rule.totalInstallments > 60
+        ? widget.rule.totalInstallments
+        : 60;
+    return AlertDialog(
+      title: const Text('Editar recorrência'),
+      content: SizedBox(
+        width: 440,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _description,
+                decoration: const InputDecoration(labelText: 'Descrição'),
               ),
-              decoration: const InputDecoration(
-                labelText: 'Valor',
-                prefixText: 'R\$ ',
+              const SizedBox(height: 10),
+              TextField(
+                controller: _amount,
+                keyboardType: TextInputType.number,
+                inputFormatters: [CentavosInputFormatter()],
+                decoration: const InputDecoration(
+                  labelText: 'Valor das próximas parcelas',
+                  prefixText: 'R\$ ',
+                ),
               ),
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              initialValue: _category,
-              decoration: const InputDecoration(labelText: 'Categoria'),
-              items: widget.categories
-                  .where((category) => !category.archived)
-                  .map(
-                    (category) => DropdownMenuItem(
-                      value: category.id,
-                      child: Text(category.label),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) =>
-                  setState(() => _category = value ?? _category),
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<RecurrenceFrequency>(
-              initialValue: _frequency,
-              decoration: const InputDecoration(labelText: 'Frequência'),
-              items: const [
-                DropdownMenuItem(
-                  value: RecurrenceFrequency.weekly,
-                  child: Text('Semanal'),
-                ),
-                DropdownMenuItem(
-                  value: RecurrenceFrequency.monthly,
-                  child: Text('Mensal'),
-                ),
-                DropdownMenuItem(
-                  value: RecurrenceFrequency.yearly,
-                  child: Text('Anual'),
-                ),
-              ],
-              onChanged: (value) =>
-                  setState(() => _frequency = value ?? _frequency),
-            ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Próximo vencimento'),
-              subtitle: Text(
-                DateFormat('dd/MM/yyyy', 'pt_BR').format(_nextDue),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                initialValue: _category,
+                decoration: const InputDecoration(labelText: 'Categoria'),
+                items: widget.categories
+                    .where(
+                      (category) =>
+                          !category.archived || category.id == _category,
+                    )
+                    .map(
+                      (category) => DropdownMenuItem(
+                        value: category.id,
+                        child: Row(
+                          children: [
+                            Icon(
+                              _categoryIconData(category.icon),
+                              color: Color(category.colorValue),
+                              size: 19,
+                            ),
+                            const SizedBox(width: 9),
+                            Text(category.label),
+                          ],
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) =>
+                    setState(() => _category = value ?? _category),
               ),
-              trailing: const Icon(Icons.calendar_month),
-              onTap: () async {
-                final selected = await showDatePicker(
-                  context: context,
-                  initialDate: _nextDue,
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime.now().add(const Duration(days: 3650)),
-                );
-                if (selected != null) setState(() => _nextDue = selected);
-              },
-            ),
-          ],
+              const SizedBox(height: 10),
+              TextField(
+                controller: _installments,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: InputDecoration(
+                  labelText: 'Total de parcelas',
+                  helperText: 'Mínimo $firstAllowed',
+                ),
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Tags', style: Theme.of(context).textTheme.titleSmall),
+              ),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: widget.knownTags.map((tag) => FilterChip(
+                  label: Text(tag),
+                  selected: _tags.contains(tag),
+                  onSelected: (selected) => setState(() {
+                    if (selected) {
+                      _tags.add(tag);
+                    } else {
+                      _tags.remove(tag);
+                    }
+                  }),
+                )).toList(),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Próximo vencimento'),
+                subtitle: Text(
+                  DateFormat('dd/MM/yyyy', 'pt_BR').format(_nextDue),
+                ),
+                trailing: const Icon(Icons.calendar_month),
+                onTap: () async {
+                  final selected = await showDatePicker(
+                    context: context,
+                    initialDate: _nextDue,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime.now().add(const Duration(days: 3650)),
+                  );
+                  if (selected != null) setState(() => _nextDue = selected);
+                },
+              ),
+            ],
+          ),
         ),
       ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancelar'),
-      ),
-      FilledButton(
-        onPressed: () {
-          final cents = _amountToCents(_amount.text);
-          if (_description.text.trim().isEmpty || cents == null) return;
-          Navigator.pop(
-            context,
-            RecurringRule(
-              id: DateTime.now().microsecondsSinceEpoch.toString(),
-              description: _description.text.trim(),
-              amountCents: cents,
-              categoryId: _category,
-              frequency: _frequency,
-              nextDue: _nextDue,
-            ),
-          );
-        },
-        child: const Text('Criar'),
-      ),
-    ],
-  );
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final cents = _amountToCents(_amount.text);
+            final installments = int.tryParse(_installments.text);
+            if (_description.text.trim().isEmpty ||
+                cents == null ||
+                installments == null ||
+                installments < firstAllowed ||
+                installments > lastAllowed) return;
+            Navigator.pop(
+              context,
+              widget.rule.copyWith(
+                description: _description.text.trim(),
+                amountCents: cents,
+                categoryId: _category,
+                totalInstallments: installments,
+                dayOfMonth: _nextDue.day,
+                nextDue: _nextDue,
+                active: installments > widget.rule.completedInstallments,
+                tags: _tags,
+              ),
+            );
+          },
+          child: const Text('Salvar'),
+        ),
+      ],
+    );
+  }
 }
 
 class ExpenseDialog extends StatefulWidget {
@@ -2438,27 +2552,41 @@ class ExpenseDialog extends StatefulWidget {
     required this.currency,
     required this.categories,
     required this.knownTags,
+    required this.history,
   });
   final Expense? expense;
   final bool quickEntry;
   final NumberFormat currency;
   final List<ExpenseCategory> categories;
   final List<String> knownTags;
+  final List<Expense> history;
 
   @override
   State<ExpenseDialog> createState() => _ExpenseDialogState();
+}
+
+class ExpenseFormResult {
+  const ExpenseFormResult(this.expense, {this.recurringRule});
+
+  final Expense expense;
+  final RecurringRule? recurringRule;
 }
 
 class _ExpenseDialogState extends State<ExpenseDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _description;
   late final TextEditingController _amount;
+  late final TextEditingController _notes;
   late final FocusNode _amountFocus;
   late DateTime _date;
   late String _category;
   bool _manualCategory = false;
   bool _didChooseCategory = false;
   late List<String> _tags;
+  late List<String> _knownTags;
+  bool _notesExpanded = false;
+  bool _repeatMonthly = false;
+  int _totalInstallments = 2;
 
   @override
   void initState() {
@@ -2470,10 +2598,13 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
           ? ''
           : (expense.amountCents / 100).toStringAsFixed(2).replaceAll('.', ','),
     );
+    _notes = TextEditingController(text: expense?.notes ?? '');
+    _notesExpanded = expense?.notes?.trim().isNotEmpty ?? false;
     _amountFocus = FocusNode()..addListener(_formatAmountOnBlur);
     _date = expense?.spentAt ?? DateTime.now();
     _category = expense?.categoryId ?? 'other';
     _tags = [...?expense?.tags];
+    _knownTags = {...widget.knownTags, ..._tags}.toList();
     _manualCategory =
         expense?.categorizationMethod == CategorizationMethod.manual;
     _didChooseCategory = false;
@@ -2483,6 +2614,7 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
   void dispose() {
     _description.dispose();
     _amount.dispose();
+    _notes.dispose();
     _amountFocus.dispose();
     super.dispose();
   }
@@ -2502,16 +2634,25 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
 
   void _descriptionChanged(String value) {
     if (_manualCategory || _didChooseCategory) return;
-    final suggested = suggestCategory(value, widget.categories);
-    if (suggested != null) setState(() => _category = suggested);
+    final suggested = suggestCategoryFromHistory(
+      value,
+      widget.history,
+      widget.categories,
+    );
+    setState(() => _category = suggested ?? 'other');
   }
 
   Future<void> _addTag() async {
     final tag = await showDialog<String>(
       context: context,
-      builder: (_) => TagInputDialog(suggestions: widget.knownTags),
+      builder: (_) => const TagInputDialog(),
     );
-    if (tag != null) setState(() => _tags = {..._tags, tag}.toList());
+    if (tag != null) {
+      setState(() {
+        _tags = {..._tags, tag}.toList();
+        _knownTags = {..._knownTags, tag}.toList();
+      });
+    }
   }
 
   int? _parseCents(String value) {
@@ -2534,9 +2675,8 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
                 focusNode: _amountFocus,
                 autofocus: true,
                 onChanged: (_) => setState(() {}),
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
+                keyboardType: TextInputType.number,
+                inputFormatters: [CentavosInputFormatter()],
                 decoration: InputDecoration(
                   labelText: 'Valor da despesa',
                   prefixText: 'R\$  ',
@@ -2585,7 +2725,17 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
                     .map(
                       (category) => DropdownMenuItem(
                         value: category.id,
-                        child: Text(category.label),
+                        child: Row(
+                          children: [
+                            Icon(
+                              _categoryIconData(category.icon),
+                              color: Color(category.colorValue),
+                              size: 19,
+                            ),
+                            const SizedBox(width: 9),
+                            Text(category.label),
+                          ],
+                        ),
                       ),
                     )
                     .toList(),
@@ -2608,21 +2758,19 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
                 spacing: 6,
                 runSpacing: 4,
                 children: [
-                  ..._tags.map(
-                    (tag) => InputChip(
+                  ..._knownTags.map(
+                    (tag) => FilterChip(
                       label: Text(tag),
-                      onDeleted: () => setState(() => _tags.remove(tag)),
+                      selected: _tags.contains(tag),
+                      onSelected: (selected) => setState(() {
+                        if (selected) {
+                          _tags.add(tag);
+                        } else {
+                          _tags.remove(tag);
+                        }
+                      }),
                     ),
                   ),
-                  ...widget.knownTags
-                      .where((tag) => !_tags.contains(tag))
-                      .map(
-                        (tag) => ActionChip(
-                          avatar: const Icon(Icons.add, size: 16),
-                          label: Text(tag),
-                          onPressed: () => setState(() => _tags.add(tag)),
-                        ),
-                      ),
                   ActionChip(
                     avatar: const Icon(Icons.add, size: 18),
                     label: const Text('Nova tag'),
@@ -2630,6 +2778,60 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
                   ),
                 ],
               ),
+              if (widget.expense == null) ...[
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('Repetir mensalmente'),
+                  value: _repeatMonthly,
+                  onChanged: (value) =>
+                      setState(() => _repeatMonthly = value ?? false),
+                ),
+                if (_repeatMonthly)
+                  TextFormField(
+                    initialValue: '$_totalInstallments',
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: const InputDecoration(
+                      labelText: 'Total de parcelas (inclui esta)',
+                      prefixIcon: Icon(Icons.repeat),
+                      helperText: 'Mínimo 2, máximo 60',
+                    ),
+                    onChanged: (value) {
+                      final count = int.tryParse(value);
+                      if (count != null) _totalInstallments = count;
+                    },
+                    validator: (value) {
+                      final count = int.tryParse(value ?? '');
+                      return count == null || count < 2 || count > 60
+                          ? 'Informe um total entre 2 e 60'
+                          : null;
+                    },
+                  ),
+              ],
+              const SizedBox(height: 4),
+              if (!_notesExpanded)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => setState(() => _notesExpanded = true),
+                    icon: const Icon(Icons.notes_outlined, size: 18),
+                    label: const Text('Adicionar notas'),
+                  ),
+                )
+              else
+                TextFormField(
+                  controller: _notes,
+                  minLines: 2,
+                  maxLines: 4,
+                  maxLength: 500,
+                  decoration: const InputDecoration(
+                    labelText: 'Notas (opcional)',
+                    alignLabelWithHint: true,
+                  ),
+                ),
               const SizedBox(height: 12),
               if (!widget.quickEntry)
                 ListTile(
@@ -2671,19 +2873,44 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
   void _save() {
     if (!_formKey.currentState!.validate()) return;
     final previous = widget.expense;
+    final id = previous?.id ?? DateTime.now().microsecondsSinceEpoch.toString();
+    final now = DateTime.now();
+    final spentAt = widget.quickEntry ? now : _date;
+    final recurrenceId = _repeatMonthly
+        ? 'rec_${DateTime.now().microsecondsSinceEpoch}'
+        : previous?.recurrenceId;
+    final recurringRule = _repeatMonthly
+        ? RecurringRule(
+            id: recurrenceId!,
+            description: _description.text.trim(),
+            amountCents: _parseCents(_amount.text)!,
+            categoryId: _category,
+            totalInstallments: _totalInstallments,
+            dayOfMonth: spentAt.day,
+            completedInstallments: 1,
+            nextDue: _advanceMonthly(spentAt),
+            tags: _tags,
+          )
+        : null;
     Navigator.pop(
       context,
-      Expense(
-        id: previous?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
-        amountCents: _parseCents(_amount.text)!,
-        description: _description.text.trim(),
-        categoryId: _category,
-        spentAt: widget.quickEntry ? DateTime.now() : _date,
-        tags: _tags,
-        source: previous?.source ?? ExpenseSource.manual,
-        categorizationMethod: _manualCategory || _didChooseCategory
-            ? CategorizationMethod.manual
-            : CategorizationMethod.automatic,
+      ExpenseFormResult(
+        Expense(
+          id: id,
+          amountCents: _parseCents(_amount.text)!,
+          description: _description.text.trim(),
+          categoryId: _category,
+          spentAt: spentAt,
+          categorySetAt: now,
+          recurrenceId: recurrenceId,
+          tags: _tags,
+          notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
+          source: previous?.source ?? ExpenseSource.manual,
+          categorizationMethod: _manualCategory || _didChooseCategory
+              ? CategorizationMethod.manual
+              : CategorizationMethod.automatic,
+        ),
+        recurringRule: recurringRule,
       ),
     );
   }

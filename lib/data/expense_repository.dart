@@ -30,9 +30,11 @@ class ExpenseRepository {
     'descricao',
     'categoria',
     'data',
+    'categoria_definida_em',
     'origem',
     'metodo_categorizacao',
     'recorrencia_id',
+    'notas',
     'tag_nome',
     'tag_ids',
     'categoria_id',
@@ -40,7 +42,9 @@ class ExpenseRepository {
     'categoria_cor',
     'categoria_arquivada',
     'limite_mensal',
-    'frequencia',
+    'parcelas_total',
+    'parcelas_concluidas',
+    'dia_vencimento',
     'proximo_vencimento',
     'ativa',
   ];
@@ -201,9 +205,12 @@ class ExpenseRepository {
         'categoria_id': entry.categoryId,
         'categoria': categoryFor(entry.categoryId, categories).label,
         'data': entry.spentAt.toIso8601String(),
+        'categoria_definida_em': (entry.categorySetAt ?? entry.spentAt)
+            .toIso8601String(),
         'origem': entry.source.name,
         'metodo_categorizacao': entry.categorizationMethod.name,
         'recorrencia_id': entry.recurrenceId ?? '',
+        'notas': entry.notes ?? '',
         'tag_ids': linkedTagIds,
       });
     }
@@ -230,6 +237,7 @@ class ExpenseRepository {
       addRow('tag_catalogo', {'id': tagIds[tag], 'tag_nome': tag});
     }
     for (final rule in await loadRecurringRules()) {
+      final linkedTagIds = rule.tags.map((tag) => tagIds[tag]!).join(',');
       addRow('recorrencia', {
         'id': rule.id,
         'descricao': rule.description,
@@ -238,7 +246,10 @@ class ExpenseRepository {
             .replaceAll('.', ','),
         'categoria_id': rule.categoryId,
         'categoria': categoryFor(rule.categoryId, categories).label,
-        'frequencia': rule.frequency.name,
+        'parcelas_total': rule.totalInstallments,
+        'parcelas_concluidas': rule.completedInstallments,
+        'dia_vencimento': rule.dayOfMonth,
+        'tag_ids': linkedTagIds,
         'proximo_vencimento': rule.nextDue.toIso8601String(),
         'ativa': rule.active,
       });
@@ -354,6 +365,9 @@ class ExpenseRepository {
               description: value(row, 'descricao'),
               categoryId: categoryId(row),
               spentAt: DateTime.parse(value(row, 'data')),
+              categorySetAt: DateTime.parse(
+                value(row, 'categoria_definida_em'),
+              ),
               source: ExpenseSource.values.firstWhere(
                 (item) => item.name == value(row, 'origem'),
                 orElse: () => ExpenseSource.manual,
@@ -365,6 +379,9 @@ class ExpenseRepository {
               recurrenceId: value(row, 'recorrencia_id').isEmpty
                   ? null
                   : value(row, 'recorrencia_id'),
+              notes: value(row, 'notas').trim().isEmpty
+                  ? null
+                  : value(row, 'notas'),
             );
             final linkedTags = value(row, 'tag_ids')
                 .split(',')
@@ -399,18 +416,32 @@ class ExpenseRepository {
             budgets[id] = cents;
             break;
           case 'recorrencia':
+            final linkedTags = value(row, 'tag_ids')
+                .split(',')
+                .map((id) => id.trim())
+                .where((id) => id.isNotEmpty)
+                .map((id) => tagNamesById[id]);
+            if (linkedTags.any((tag) => tag == null)) {
+              throw const FormatException(
+                'A recorrência referencia um ID de tag inexistente.',
+              );
+            }
             recurring.add(
               RecurringRule(
                 id: value(row, 'id'),
                 description: value(row, 'descricao'),
                 amountCents: money(row, 'valor'),
                 categoryId: categoryId(row),
-                frequency: RecurrenceFrequency.values.firstWhere(
-                  (item) => item.name == value(row, 'frequencia'),
-                  orElse: () => RecurrenceFrequency.monthly,
+                totalInstallments: integer(row, 'parcelas_total'),
+                dayOfMonth: integer(row, 'dia_vencimento'),
+                completedInstallments: integer(
+                  row,
+                  'parcelas_concluidas',
+                  fallback: 1,
                 ),
                 nextDue: DateTime.parse(value(row, 'proximo_vencimento')),
                 active: boolean(row, 'ativa', fallback: true),
+                tags: linkedTags.cast<String>().toSet().toList(),
               ),
             );
             break;
@@ -447,6 +478,11 @@ class ExpenseRepository {
           (rule) =>
               rule.id.isEmpty ||
               rule.amountCents <= 0 ||
+              rule.totalInstallments < 2 ||
+              rule.dayOfMonth < 1 ||
+              rule.dayOfMonth > 31 ||
+              rule.completedInstallments < 1 ||
+              rule.completedInstallments > rule.totalInstallments ||
               !categoryIds.contains(rule.categoryId),
         ) ||
         budgets.keys.any((id) => !categoryIds.contains(id))) {

@@ -6,10 +6,11 @@ Aplicativo Flutter para acompanhar despesas pessoais no Android e na web.
 
 - Início com total e lançamentos recentes do mês.
 - Cadastro, edição e exclusão de despesas.
-- Categorias predefinidas e sugestões automáticas pela descrição.
+- Categorias predefinidas e sugestão baseada na última categoria usada para a mesma descrição.
 - Categorias personalizadas, com opção de arquivar sem perder o histórico.
 - Busca e filtros por data, categoria e tags.
-- Recorrências semanais, mensais ou anuais, sempre confirmadas antes de lançar.
+- Parcelas mensais automáticas, processadas ao abrir o app ou atualizar a página.
+- Notas opcionais em cada despesa, incluídas no CSV.
 - Limite mensal por categoria e valor restante.
 - Relatório de gastos por categoria.
 - Dados guardados localmente no dispositivo ou navegador.

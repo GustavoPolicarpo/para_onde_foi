@@ -30,9 +30,7 @@ class QuickEntryActivity : FlutterActivity() {
                         this,
                         call.argument<String>("month") ?: "",
                         call.argument<String>("amount") ?: "R$ 0,00",
-                        call.argument<String>("budgetStatus") ?: "",
-                        call.argument<Int>("budgetProgress") ?: 0,
-                        call.argument<Boolean>("hasBudget") ?: false
+                        call.argument<String>("budgets") ?: "[]"
                     )
                     result.success(null)
                 }

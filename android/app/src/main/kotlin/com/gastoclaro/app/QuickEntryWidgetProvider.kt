@@ -6,6 +6,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.widget.RemoteViews
 import java.util.Locale
 
@@ -25,21 +26,18 @@ class QuickEntryWidgetProvider : AppWidgetProvider() {
             context: Context,
             month: String,
             amount: String,
-            budgetStatus: String,
-            budgetProgress: Int,
-            hasBudget: Boolean
+            budgetsJson: String
         ) {
             context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
                 .putString("month", month)
                 .putString("amount", amount)
-                .putString("budget_status", budgetStatus)
-                .putInt("budget_progress", budgetProgress.coerceIn(0, 100))
-                .putBoolean("has_budget", hasBudget)
+                .putString("budgets", budgetsJson)
                 .apply()
             val manager = AppWidgetManager.getInstance(context)
             val ids = manager.getAppWidgetIds(
                 ComponentName(context, QuickEntryWidgetProvider::class.java)
             )
+            manager.notifyAppWidgetViewDataChanged(ids, R.id.widget_budgets)
             ids.forEach { updateWidget(context, manager, it) }
         }
 
@@ -52,7 +50,6 @@ class QuickEntryWidgetProvider : AppWidgetProvider() {
             val views = RemoteViews(context.packageName, R.layout.widget_quick_entry)
             val month = preferences.getString("month", "")?.uppercase(Locale("pt", "BR"))
                 ?: ""
-            val hasBudget = preferences.getBoolean("has_budget", false)
             views.setTextViewText(
                 R.id.widget_month_label,
                 if (month.isBlank()) "GASTOS DO MÊS" else "GASTOS EM $month"
@@ -61,26 +58,18 @@ class QuickEntryWidgetProvider : AppWidgetProvider() {
                 R.id.widget_total,
                 preferences.getString("amount", "R$ 0,00") ?: "R$ 0,00"
             )
-            val budgetStatus = preferences.getString(
-                "budget_status",
-                "Abra o app para atualizar seus dados"
-            ) ?: ""
-            views.setTextViewText(R.id.widget_budget_status, budgetStatus)
-            views.setTextColor(
-                R.id.widget_budget_status,
-                if (budgetStatus.contains("acima dos limites")) 0xFFB43D36.toInt()
-                else 0xFF53635A.toInt()
-            )
+            val budgets = preferences.getString("budgets", "[]") ?: "[]"
+            val hasBudgets = budgets != "[]"
             views.setViewVisibility(
-                R.id.widget_budget_progress,
-                if (hasBudget) android.view.View.VISIBLE else android.view.View.GONE
+                R.id.widget_budget_empty,
+                if (hasBudgets) android.view.View.GONE else android.view.View.VISIBLE
             )
-            views.setProgressBar(
-                R.id.widget_budget_progress,
-                100,
-                preferences.getInt("budget_progress", 0),
-                false
-            )
+            val serviceIntent = Intent(context, WidgetBudgetService::class.java).apply {
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                data = Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
+            }
+            views.setRemoteAdapter(R.id.widget_budgets, serviceIntent)
+            views.setEmptyView(R.id.widget_budgets, R.id.widget_budget_empty)
             views.setOnClickPendingIntent(
                 R.id.widget_expense_button,
                 createPendingIntent(context, appWidgetId)
