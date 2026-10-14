@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -11,18 +12,87 @@ import 'package:file_saver/file_saver.dart';
 import 'data/expense_repository.dart';
 import 'domain/expense.dart';
 
+const _widgetChannel = MethodChannel('gasto_claro/widget');
+final _expenseHomeKey = GlobalKey<_ExpenseHomeState>();
+
+Future<void> _syncWidgetSummary(
+  List<Expense> expenses,
+  Map<String, int> budgets,
+  NumberFormat currency,
+) async {
+  final now = DateTime.now();
+  final monthExpenses = expenses.where(
+    (entry) =>
+        entry.spentAt.year == now.year && entry.spentAt.month == now.month,
+  );
+  final totalCents = monthExpenses.fold<int>(
+    0,
+    (sum, entry) => sum + entry.amountCents,
+  );
+  final totalBudgetCents = budgets.values.fold<int>(
+    0,
+    (sum, value) => sum + value,
+  );
+  final budgetedSpendCents = monthExpenses
+      .where((entry) => budgets.containsKey(entry.categoryId))
+      .fold<int>(0, (sum, entry) => sum + entry.amountCents);
+  final budgetDifference = totalBudgetCents - budgetedSpendCents;
+  final budgetStatus = totalBudgetCents == 0
+      ? 'Configure limites para acompanhar os orçamentos'
+      : budgetDifference < 0
+      ? '${currency.format(-budgetDifference / 100)} acima dos limites'
+      : '${currency.format(budgetDifference / 100)} disponíveis nos orçamentos';
+  try {
+    await _widgetChannel.invokeMethod<void>('updateWidgetSummary', {
+      'month': DateFormat('MMMM', 'pt_BR').format(now),
+      'amount': currency.format(totalCents / 100),
+      'budgetStatus': budgetStatus,
+      'budgetProgress': totalBudgetCents == 0
+          ? 0
+          : ((budgetedSpendCents * 100) ~/ totalBudgetCents).clamp(0, 100),
+      'hasBudget': totalBudgetCents > 0,
+    });
+  } on MissingPluginException {
+    // Web and non-Android builds don't have the Android home widget.
+  } on PlatformException {
+    // Keep app saves independent from widget refresh failures.
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('pt_BR');
-  runApp(const ControleGastosApp());
+  final initialQuickEntry = await _widgetChannel
+      .invokeMethod<bool>('getInitialQuickEntry')
+      .catchError((_) => false);
+  if (initialQuickEntry != true) {
+    runApp(const GastoClaroApp());
+  } else {
+    runApp(const QuickEntryApp());
+  }
 }
 
-class ControleGastosApp extends StatelessWidget {
-  const ControleGastosApp({super.key});
+class GastoClaroApp extends StatefulWidget {
+  const GastoClaroApp({super.key});
+
+  @override
+  State<GastoClaroApp> createState() => _GastoClaroAppState();
+}
+
+class _GastoClaroAppState extends State<GastoClaroApp> {
+  @override
+  void initState() {
+    super.initState();
+    _widgetChannel.setMethodCallHandler((call) async {
+      if (call.method == 'openEntry') {
+        _expenseHomeKey.currentState?._openExpense();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Meu controle',
+    title: 'GastoClaro',
     debugShowCheckedModeBanner: false,
     locale: const Locale('pt', 'BR'),
     supportedLocales: const [Locale('pt', 'BR')],
@@ -52,11 +122,123 @@ class ControleGastosApp extends StatelessWidget {
         ),
       ),
     ),
-    home: const ExpenseHome(),
+    home: ExpenseHome(key: _expenseHomeKey),
   );
 }
 
-typedef MyApp = ControleGastosApp;
+typedef MyApp = GastoClaroApp;
+
+class QuickEntryApp extends StatelessWidget {
+  const QuickEntryApp({super.key});
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    title: 'Novo lançamento',
+    debugShowCheckedModeBanner: false,
+    locale: const Locale('pt', 'BR'),
+    supportedLocales: const [Locale('pt', 'BR')],
+    localizationsDelegates: const [
+      GlobalMaterialLocalizations.delegate,
+      GlobalWidgetsLocalizations.delegate,
+      GlobalCupertinoLocalizations.delegate,
+    ],
+    theme: ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF176B58)),
+      scaffoldBackgroundColor: Colors.transparent,
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: const Color(0xFFF5F6F4),
+        border: OutlineInputBorder(
+          borderSide: BorderSide.none,
+          borderRadius: BorderRadius.circular(14),
+        ),
+      ),
+    ),
+    home: const QuickEntryHost(),
+  );
+}
+
+class QuickEntryHost extends StatefulWidget {
+  const QuickEntryHost({super.key});
+
+  @override
+  State<QuickEntryHost> createState() => _QuickEntryHostState();
+}
+
+class _QuickEntryHostState extends State<QuickEntryHost> {
+  final _repository = ExpenseRepository();
+  final _currency = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
+  List<ExpenseCategory> _categories = expenseCategories;
+  List<String> _tags = [];
+  bool _opened = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepare();
+  }
+
+  Future<void> _prepare() async {
+    final customCategories = await _repository.loadCategories();
+    final tags = await _repository.loadTags();
+    final categoryMap = {
+      for (final category in expenseCategories) category.id: category,
+      for (final category in customCategories) category.id: category,
+    };
+    if (!mounted) return;
+    setState(() {
+      _categories = categoryMap.values.toList();
+      _tags = tags;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openForm());
+  }
+
+  Future<void> _openForm() async {
+    if (_opened || !mounted) return;
+    _opened = true;
+    final result = await showDialog<Expense>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => ExpenseDialog(
+        quickEntry: true,
+        currency: _currency,
+        categories: _categories,
+        knownTags: _tags,
+      ),
+    );
+    if (!mounted) return;
+    if (result == null) {
+      await _widgetChannel.invokeMethod<void>('finishQuickEntry', false);
+      return;
+    }
+    try {
+      final quickEntry = result.copyWith(spentAt: DateTime.now());
+      final entries = await _repository.load();
+      entries.add(quickEntry);
+      entries.sort((a, b) => b.spentAt.compareTo(a.spentAt));
+      await _repository.saveAll(entries);
+      await _repository.saveTags({..._tags, ...quickEntry.tags}.toList());
+      final budgets = await _repository.loadBudgets();
+      await _syncWidgetSummary(entries, budgets, _currency);
+      await _widgetChannel.invokeMethod<void>('finishQuickEntry', true);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Não foi possível salvar o lançamento.'),
+          ),
+        );
+      }
+      _opened = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _openForm());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      const Scaffold(body: Center(child: CircularProgressIndicator()));
+}
 
 class ExpenseHome extends StatefulWidget {
   const ExpenseHome({super.key});
@@ -64,7 +246,7 @@ class ExpenseHome extends StatefulWidget {
   State<ExpenseHome> createState() => _ExpenseHomeState();
 }
 
-class _ExpenseHomeState extends State<ExpenseHome> {
+class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
   final _repository = ExpenseRepository();
   final _currency = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
   final _dateFormat = DateFormat('dd/MM/yyyy', 'pt_BR');
@@ -75,13 +257,13 @@ class _ExpenseHomeState extends State<ExpenseHome> {
   List<String> _tags = [];
   final _searchController = TextEditingController();
   DateTimeRange? _dateRange;
-  EntryType? _typeFilter;
   final Set<String> _movementTagFilters = {};
   final Set<String> _reportTagFilters = {};
   bool _reportGroupByTags = false;
   bool _selectionMode = false;
   final Set<String> _selectedIds = {};
   bool _loading = true;
+  bool _refreshInProgress = false;
   int _page = 0;
   DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
   String? _categoryFilter;
@@ -89,36 +271,54 @@ class _ExpenseHomeState extends State<ExpenseHome> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _load();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
-    final expenses = await _repository.load();
-    final customCategories = await _repository.loadCategories();
-    final budgets = await _repository.loadBudgets();
-    final recurringRules = await _repository.loadRecurringRules();
-    final storedTags = await _repository.loadTags();
-    final categoryMap = {
-      for (final category in expenseCategories) category.id: category,
-    };
-    for (final category in customCategories) {
-      categoryMap[category.id] = category;
+    if (_refreshInProgress) return;
+    _refreshInProgress = true;
+    try {
+      final expenses = await _repository.load();
+      final customCategories = await _repository.loadCategories();
+      final budgets = await _repository.loadBudgets();
+      final recurringRules = await _repository.loadRecurringRules();
+      final storedTags = await _repository.loadTags();
+      final categoryMap = {
+        for (final category in expenseCategories) category.id: category,
+      };
+      for (final category in customCategories) {
+        categoryMap[category.id] = category;
+      }
+      if (!mounted) return;
+      setState(() {
+        _expenses = expenses;
+        _categories = categoryMap.values.toList();
+        _budgets = budgets;
+        _recurringRules = recurringRules;
+        _tags = storedTags;
+        final now = DateTime.now();
+        if (_month.year != now.year || _month.month != now.month) {
+          _month = DateTime(now.year, now.month);
+        }
+        _loading = false;
+      });
+      await _syncWidgetSummary(expenses, budgets, _currency);
+    } finally {
+      _refreshInProgress = false;
     }
-    if (!mounted) return;
-    setState(() {
-      _expenses = expenses;
-      _categories = categoryMap.values.toList();
-      _budgets = budgets;
-      _recurringRules = recurringRules;
-      _tags = storedTags;
-      _loading = false;
-    });
   }
 
   List<Expense> get _monthExpenses => _expenses
@@ -129,18 +329,14 @@ class _ExpenseHomeState extends State<ExpenseHome> {
       )
       .toList();
 
-  int get _monthExpensesTotal => _monthExpenses
-      .where((entry) => entry.type == EntryType.expense)
-      .fold(0, (sum, entry) => sum + entry.amountCents);
-  int get _monthIncomeTotal => _monthExpenses
-      .where((entry) => entry.type == EntryType.income)
-      .fold(0, (sum, entry) => sum + entry.amountCents);
-  int get _monthBalance => _monthIncomeTotal - _monthExpensesTotal;
+  int get _monthExpensesTotal =>
+      _monthExpenses.fold(0, (sum, entry) => sum + entry.amountCents);
 
   Future<void> _persist(List<Expense> next) async {
     next.sort((a, b) => b.spentAt.compareTo(a.spentAt));
     await _repository.saveAll(next);
     if (mounted) setState(() => _expenses = next);
+    await _syncWidgetSummary(next, _budgets, _currency);
   }
 
   Future<void> _persistCategories(List<ExpenseCategory> next) async {
@@ -161,6 +357,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
   Future<void> _persistBudgets(Map<String, int> next) async {
     await _repository.saveBudgets(next);
     if (mounted) setState(() => _budgets = next);
+    await _syncWidgetSummary(_expenses, next, _currency);
   }
 
   Future<void> _persistRecurring(List<RecurringRule> next) async {
@@ -470,30 +667,23 @@ class _ExpenseHomeState extends State<ExpenseHome> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Saldo do mês',
+                  'Despesas do mês',
                   style: TextStyle(color: Colors.grey.shade700),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  _currency.format(_monthBalance / 100),
+                  _currency.format(_monthExpensesTotal / 100),
                   style: TextStyle(
                     fontSize: 34,
                     fontWeight: FontWeight.w700,
                     letterSpacing: -1,
-                    color: _monthBalance < 0
-                        ? Colors.red.shade700
-                        : Colors.green.shade800,
+                    color: Theme.of(context).colorScheme.primary,
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Receitas ${_currency.format(_monthIncomeTotal / 100)}  ·  Despesas ${_currency.format(_monthExpensesTotal / 100)}',
+                  '${_monthExpenses.length} despesas registradas neste mês',
                   style: TextStyle(color: Colors.grey.shade600),
-                ),
-                const SizedBox(height: 18),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: const LinearProgressIndicator(value: 1, minHeight: 8),
                 ),
               ],
             ),
@@ -509,7 +699,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
         if (latest.isEmpty)
           _emptyState(
             'Nenhum movimento neste mês',
-            'Registre uma entrada ou despesa para começar.',
+            'Registre sua primeira despesa para acompanhar o mês.',
           ),
         ...latest.take(5).map((expense) => _expenseTile(expense)),
         const SizedBox(height: 80),
@@ -524,7 +714,6 @@ class _ExpenseHomeState extends State<ExpenseHome> {
               (expense) =>
                   (_categoryFilter == null ||
                       expense.categoryId == _categoryFilter) &&
-                  (_typeFilter == null || expense.type == _typeFilter) &&
                   ('${expense.description} ${expense.tags.join(' ')}')
                       .toLowerCase()
                       .contains(_searchController.text.trim().toLowerCase()) &&
@@ -557,7 +746,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
             Expanded(
               child: _pageHeader(
                 'Movimentos',
-                'Entradas e despesas do período selecionado.',
+                'Despesas do período selecionado.',
               ),
             ),
             TextButton(
@@ -607,28 +796,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
         const SizedBox(height: 10),
         Row(
           children: [
-            Expanded(
-              child: DropdownButtonFormField<EntryType?>(
-                initialValue: _typeFilter,
-                decoration: const InputDecoration(labelText: 'Tipo'),
-                items: const [
-                  DropdownMenuItem<EntryType?>(
-                    value: null,
-                    child: Text('Todos'),
-                  ),
-                  DropdownMenuItem<EntryType?>(
-                    value: EntryType.expense,
-                    child: Text('Despesas'),
-                  ),
-                  DropdownMenuItem<EntryType?>(
-                    value: EntryType.income,
-                    child: Text('Receitas'),
-                  ),
-                ],
-                onChanged: (value) => setState(() => _typeFilter = value),
-              ),
-            ),
-            const SizedBox(width: 8),
+            const Spacer(),
             OutlinedButton.icon(
               onPressed: _chooseDateRange,
               icon: const Icon(Icons.date_range),
@@ -767,9 +935,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
   Widget _reports() {
     final totals = <String, int>{};
     final reportEntries = _monthExpenses.where(
-      (entry) =>
-          entry.type == EntryType.expense &&
-          _reportTagFilters.every(entry.tags.contains),
+      (entry) => _reportTagFilters.every(entry.tags.contains),
     );
     for (final expense in reportEntries) {
       final groupKey = _reportGroupByTags
@@ -915,9 +1081,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
 
   Widget _budgetPage() {
     final expenseByCategory = <String, int>{};
-    for (final entry in _monthExpenses.where(
-      (entry) => entry.type == EntryType.expense,
-    )) {
+    for (final entry in _monthExpenses) {
       expenseByCategory.update(
         entry.categoryId,
         (value) => value + entry.amountCents,
@@ -1062,7 +1226,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
       if (_recurringRules.isEmpty)
         _emptyState(
           'Nenhuma recorrência',
-          'Cadastre uma conta ou receita periódica e confirme cada lançamento quando vencer.',
+          'Cadastre uma despesa periódica e confirme cada lançamento quando vencer.',
         ),
       ..._recurringRules.map(
         (rule) => Card(
@@ -1091,7 +1255,6 @@ class _ExpenseHomeState extends State<ExpenseHome> {
                                   description: item.description,
                                   amountCents: item.amountCents,
                                   categoryId: item.categoryId,
-                                  type: item.type,
                                   frequency: item.frequency,
                                   nextDue: item.nextDue,
                                   active: !item.active,
@@ -1197,7 +1360,6 @@ class _ExpenseHomeState extends State<ExpenseHome> {
           description: rule.description,
           categoryId: rule.categoryId,
           spentAt: rule.nextDue,
-          type: rule.type,
           recurrenceId: rule.id,
         ),
       ]);
@@ -1211,7 +1373,6 @@ class _ExpenseHomeState extends State<ExpenseHome> {
                     description: item.description,
                     amountCents: item.amountCents,
                     categoryId: item.categoryId,
-                    type: item.type,
                     frequency: item.frequency,
                     nextDue: _advanceDate(item.nextDue, item.frequency),
                     active: item.active,
@@ -1237,7 +1398,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
       builder: (context) => AlertDialog(
         title: Text(rule.description),
         content: Text(
-          '${rule.type == EntryType.expense ? 'Despesa' : 'Entrada'} de ${_currency.format(rule.amountCents / 100)} · ${_frequencyLabel(rule.frequency)}\nPróximo vencimento: ${_dateFormat.format(rule.nextDue)}\nO app não lança automaticamente; confirme para criar o movimento.',
+          'Despesa de ${_currency.format(rule.amountCents / 100)} · ${_frequencyLabel(rule.frequency)}\nPróximo vencimento: ${_dateFormat.format(rule.nextDue)}\nO app não lança automaticamente; confirme para criar o movimento.',
         ),
         actions: [
           TextButton(
@@ -1505,7 +1666,7 @@ class _ExpenseHomeState extends State<ExpenseHome> {
     try {
       final contents = await _repository.exportCsv();
       await FileSaver.instance.saveAs(
-        name: 'controle_gastos',
+        name: 'gastoclaro_despesas',
         bytes: Uint8List.fromList(utf8.encode(contents)),
         fileExtension: 'csv',
         mimeType: MimeType.csv,
@@ -1697,13 +1858,8 @@ class _ExpenseHomeState extends State<ExpenseHome> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              '${expense.type == EntryType.income ? '+' : '−'} ${_currency.format(expense.amountCents / 100)}',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: expense.type == EntryType.income
-                    ? Colors.green.shade800
-                    : null,
-              ),
+              '− ${_currency.format(expense.amountCents / 100)}',
+              style: TextStyle(fontWeight: FontWeight.w700),
             ),
             if (actions)
               PopupMenuButton<String>(
@@ -2147,7 +2303,6 @@ class _TagInputDialogState extends State<TagInputDialog> {
 class _RecurringDialogState extends State<RecurringDialog> {
   final _description = TextEditingController();
   final _amount = TextEditingController();
-  EntryType _type = EntryType.expense;
   RecurrenceFrequency _frequency = RecurrenceFrequency.monthly;
   DateTime _nextDue = DateTime.now();
   late String _category;
@@ -2189,16 +2344,6 @@ class _RecurringDialogState extends State<RecurringDialog> {
                 labelText: 'Valor',
                 prefixText: 'R\$ ',
               ),
-            ),
-            const SizedBox(height: 10),
-            SegmentedButton<EntryType>(
-              segments: const [
-                ButtonSegment(value: EntryType.expense, label: Text('Despesa')),
-                ButtonSegment(value: EntryType.income, label: Text('Receita')),
-              ],
-              selected: {_type},
-              onSelectionChanged: (values) =>
-                  setState(() => _type = values.first),
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
@@ -2274,7 +2419,6 @@ class _RecurringDialogState extends State<RecurringDialog> {
               description: _description.text.trim(),
               amountCents: cents,
               categoryId: _category,
-              type: _type,
               frequency: _frequency,
               nextDue: _nextDue,
             ),
@@ -2290,11 +2434,13 @@ class ExpenseDialog extends StatefulWidget {
   const ExpenseDialog({
     super.key,
     this.expense,
+    this.quickEntry = false,
     required this.currency,
     required this.categories,
     required this.knownTags,
   });
   final Expense? expense;
+  final bool quickEntry;
   final NumberFormat currency;
   final List<ExpenseCategory> categories;
   final List<String> knownTags;
@@ -2312,7 +2458,6 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
   late String _category;
   bool _manualCategory = false;
   bool _didChooseCategory = false;
-  late EntryType _type;
   late List<String> _tags;
 
   @override
@@ -2328,7 +2473,6 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
     _amountFocus = FocusNode()..addListener(_formatAmountOnBlur);
     _date = expense?.spentAt ?? DateTime.now();
     _category = expense?.categoryId ?? 'other';
-    _type = expense?.type ?? EntryType.expense;
     _tags = [...?expense?.tags];
     _manualCategory =
         expense?.categorizationMethod == CategorizationMethod.manual;
@@ -2376,11 +2520,7 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text(
-      widget.expense == null
-          ? (_type == EntryType.income ? 'Nova receita' : 'Nova despesa')
-          : (_type == EntryType.income ? 'Editar receita' : 'Editar despesa'),
-    ),
+    title: Text(widget.expense == null ? 'Nova despesa' : 'Editar despesa'),
     content: SizedBox(
       width: 440,
       child: Form(
@@ -2398,9 +2538,7 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
                   decimal: true,
                 ),
                 decoration: InputDecoration(
-                  labelText: _type == EntryType.income
-                      ? 'Valor recebido'
-                      : 'Valor da despesa',
+                  labelText: 'Valor da despesa',
                   prefixText: 'R\$  ',
                   prefixIcon: Icon(Icons.payments_outlined),
                 ),
@@ -2418,24 +2556,6 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
                     ),
                   ),
                 ),
-              const SizedBox(height: 12),
-              SegmentedButton<EntryType>(
-                segments: const [
-                  ButtonSegment(
-                    value: EntryType.expense,
-                    label: Text('Despesa'),
-                    icon: Icon(Icons.arrow_upward),
-                  ),
-                  ButtonSegment(
-                    value: EntryType.income,
-                    label: Text('Receita'),
-                    icon: Icon(Icons.arrow_downward),
-                  ),
-                ],
-                selected: {_type},
-                onSelectionChanged: (values) =>
-                    setState(() => _type = values.first),
-              ),
               const SizedBox(height: 12),
               TextFormField(
                 controller: _description,
@@ -2511,27 +2631,26 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
                 ],
               ),
               const SizedBox(height: 12),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.calendar_today_outlined),
-                title: Text(
-                  _type == EntryType.income
-                      ? 'Data do recebimento'
-                      : 'Data da despesa',
+              if (!widget.quickEntry)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.calendar_today_outlined),
+                  title: Text('Data da despesa'),
+                  subtitle: Text(
+                    DateFormat('dd/MM/yyyy', 'pt_BR').format(_date),
+                  ),
+                  trailing: const Icon(Icons.edit_calendar_outlined),
+                  onTap: () async {
+                    final selected = await showDatePicker(
+                      context: context,
+                      initialDate: _date,
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime.now().add(const Duration(days: 366)),
+                      locale: const Locale('pt', 'BR'),
+                    );
+                    if (selected != null) setState(() => _date = selected);
+                  },
                 ),
-                subtitle: Text(DateFormat('dd/MM/yyyy', 'pt_BR').format(_date)),
-                trailing: const Icon(Icons.edit_calendar_outlined),
-                onTap: () async {
-                  final selected = await showDatePicker(
-                    context: context,
-                    initialDate: _date,
-                    firstDate: DateTime(2000),
-                    lastDate: DateTime.now().add(const Duration(days: 366)),
-                    locale: const Locale('pt', 'BR'),
-                  );
-                  if (selected != null) setState(() => _date = selected);
-                },
-              ),
             ],
           ),
         ),
@@ -2540,13 +2659,11 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
     actions: [
       TextButton(
         onPressed: () => Navigator.pop(context),
-        child: const Text('Cancelar'),
+        child: Text(widget.quickEntry ? 'Fechar' : 'Cancelar'),
       ),
       FilledButton(
         onPressed: _save,
-        child: Text(
-          _type == EntryType.income ? 'Salvar receita' : 'Salvar despesa',
-        ),
+        child: Text(widget.quickEntry ? 'Confirmar' : 'Salvar despesa'),
       ),
     ],
   );
@@ -2561,8 +2678,7 @@ class _ExpenseDialogState extends State<ExpenseDialog> {
         amountCents: _parseCents(_amount.text)!,
         description: _description.text.trim(),
         categoryId: _category,
-        spentAt: _date,
-        type: _type,
+        spentAt: widget.quickEntry ? DateTime.now() : _date,
         tags: _tags,
         source: previous?.source ?? ExpenseSource.manual,
         categorizationMethod: _manualCategory || _didChooseCategory

@@ -30,7 +30,6 @@ class ExpenseRepository {
     'descricao',
     'categoria',
     'data',
-    'tipo_lancamento',
     'origem',
     'metodo_categorizacao',
     'recorrencia_id',
@@ -45,11 +44,11 @@ class ExpenseRepository {
     'proximo_vencimento',
     'ativa',
   ];
-  static const _entriesKey = 'controle_gastos.entries.v2';
-  static const _categoriesKey = 'controle_gastos.categories.v1';
-  static const _budgetsKey = 'controle_gastos.budgets.v1';
-  static const _recurringKey = 'controle_gastos.recurring.v1';
-  static const _tagsKey = 'controle_gastos.tags.v1';
+  static const _entriesKey = 'gasto_claro.entries.v1';
+  static const _categoriesKey = 'gasto_claro.categories.v1';
+  static const _budgetsKey = 'gasto_claro.budgets.v1';
+  static const _recurringKey = 'gasto_claro.recurring.v1';
+  static const _tagsKey = 'gasto_claro.tags.v1';
   static Map<String, String> _tagIds(Iterable<String> values) {
     String slug(String value) => value
         .trim()
@@ -202,7 +201,6 @@ class ExpenseRepository {
         'categoria_id': entry.categoryId,
         'categoria': categoryFor(entry.categoryId, categories).label,
         'data': entry.spentAt.toIso8601String(),
-        'tipo_lancamento': entry.type.name,
         'origem': entry.source.name,
         'metodo_categorizacao': entry.categorizationMethod.name,
         'recorrencia_id': entry.recurrenceId ?? '',
@@ -240,7 +238,6 @@ class ExpenseRepository {
             .replaceAll('.', ','),
         'categoria_id': rule.categoryId,
         'categoria': categoryFor(rule.categoryId, categories).label,
-        'tipo_lancamento': rule.type.name,
         'frequencia': rule.frequency.name,
         'proximo_vencimento': rule.nextDue.toIso8601String(),
         'ativa': rule.active,
@@ -357,10 +354,6 @@ class ExpenseRepository {
               description: value(row, 'descricao'),
               categoryId: categoryId(row),
               spentAt: DateTime.parse(value(row, 'data')),
-              type: EntryType.values.firstWhere(
-                (item) => item.name == value(row, 'tipo_lancamento'),
-                orElse: () => EntryType.expense,
-              ),
               source: ExpenseSource.values.firstWhere(
                 (item) => item.name == value(row, 'origem'),
                 orElse: () => ExpenseSource.manual,
@@ -412,10 +405,6 @@ class ExpenseRepository {
                 description: value(row, 'descricao'),
                 amountCents: money(row, 'valor'),
                 categoryId: categoryId(row),
-                type: EntryType.values.firstWhere(
-                  (item) => item.name == value(row, 'tipo_lancamento'),
-                  orElse: () => EntryType.expense,
-                ),
                 frequency: RecurrenceFrequency.values.firstWhere(
                   (item) => item.name == value(row, 'frequencia'),
                   orElse: () => RecurrenceFrequency.monthly,

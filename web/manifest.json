@@ -1,6 +1,6 @@
 {
-    "name": "controle_gastos",
-    "short_name": "controle_gastos",
+    "name": "GastoClaro",
+    "short_name": "GastoClaro",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

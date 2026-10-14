@@ -1,5 +1,5 @@
-name: controle_gastos
-description: "Controle local de receitas e despesas para Android e web."
+name: gasto_claro
+description: "Controle local de despesas para Android e web."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev

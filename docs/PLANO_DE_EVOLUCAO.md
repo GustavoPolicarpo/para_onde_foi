@@ -1,25 +1,25 @@
-# Plano revisado — controle de gastos
+# Plano revisado — GastoClaro
 
 ## Objetivo
 
-Entregar um app pessoal de finanças para Android e web, com dados locais, entradas e despesas, categorias, orçamento, recorrências, relatórios e recuperação de backup. O widget Android fica para depois da consolidação dessas funções; Open Finance vem mais adiante.
+Entregar um app pessoal para Android e web focado em registrar despesas e entender os gastos por mês, categoria e tags. O widget Android oferece cadastro rápido; Open Finance fica para uma fase futura.
 
 ## Estado atual do repositório
 
 - O scaffold Flutter já existe em `lib/`, `android/` e `web/`; a tarefa não é mais criar o projeto.
 - `lib/main.dart` e `README.md` já descrevem e implementam o produto, não o exemplo padrão do Flutter.
-- O MVP inicial e a etapa de ampliação do produto base foram implementados.
+- O produto base, incluindo categorias, filtros, recorrências, orçamentos, relatórios e CSV, está implementado.
 - O teste de widget que veio do scaffold ainda se refere ao contador de demonstração e precisa ser atualizado antes de usar a suíte.
-- O widget ainda não existe.
+- O widget Android mostra o total de despesas do mês e o progresso dos orçamentos, além de abrir o cadastro rápido de despesa.
 - Não há backend nem integração financeira.
 
 ## Decisões de arquitetura
 
 - **Cliente:** Flutter para Android e web.
 - **Persistência atual do MVP:** `shared_preferences` com JSON versionado, por ser simples e compatível com Android e web. É adequado para o volume pequeno de um protótipo pessoal; não é a base ideal para histórico grande, consultas complexas ou transações. Migrar para Drift/SQLite quando esses requisitos surgirem. Armazenamento web e Android são locais e independentes; não há sincronização entre dispositivos.
-- **Domínio:** armazenar dinheiro como inteiro em centavos, com moeda explícita (`BRL` inicialmente), data da despesa, descrição, categoria e origem. Valores e datas devem ser tratados sem depender da localidade da máquina.
+- **Domínio:** armazenar dinheiro como inteiro em centavos, com moeda explícita (`BRL` inicialmente), data da despesa, descrição, categoria e origem. O escopo atual contém somente despesas.
 - **Origem:** usar enum `manual`, `regraAutomatica` e `openFinance`. Uma regra automática descreve como categorizar um lançamento e pode classificar uma despesa manual ou importada; origem e método de classificação são conceitos diferentes.
-- **Widget:** widget de Android em Jetpack Glance, integrado ao app Flutter. O widget é uma interface de entrada rápida, não uma segunda implementação do domínio. Ao tocar em salvar, deve abrir/acionar o app com um rascunho; o fluxo central valida e grava a despesa. Widgets têm ciclo de vida e processo próprios, então não devem depender de estado em memória do Flutter.
+- **Widget:** widget Android integrado ao app Flutter. Ele apresenta um resumo mensal e inicia o formulário rápido de despesa, que valida e grava o lançamento.
 - **Backend:** nenhum para o MVP. Para Open Finance, o segredo do agregador fica no servidor; o app recebe token temporário de conexão.
 - **Privacidade:** sem conta e sem envio de dados. O backup é manual; a troca entre Android e navegador depende de exportar e importar o arquivo.
 
@@ -33,7 +33,7 @@ Entregar um app pessoal de finanças para Android e web, com dados locais, entra
 6. Relatório mensal por categoria.
 7. Persistência local em Android e web.
 
-Widget, sincronização, login, orçamento, recorrências, metas, Open Finance e importação de extratos continuam fora do MVP entregue.
+Sincronização, login, metas e Open Finance continuam fora do escopo atual. O app já inclui orçamento, recorrências, CSV e widget Android.
 
 ## Entregue nesta implementação
 
@@ -42,7 +42,7 @@ Widget, sincronização, login, orçamento, recorrências, metas, Open Finance e
 - Categorias predefinidas e sugestão automática por palavras na descrição, com escolha manual disponível.
 - Seletor de mês, filtro por categoria, resumo mensal e totais por categoria.
 - Persistência local via `shared_preferences` em Android e web.
-- Receitas e saldo do mês, categorias editáveis/arquiváveis, busca e filtros, recorrências confirmadas pelo usuário, orçamentos mensais e backup JSON com opção de mesclar ou substituir.
+- Categorias editáveis/arquiváveis, busca e filtros, recorrências confirmadas pelo usuário, orçamentos mensais e importação/exportação CSV.
 
 ## Próximas tarefas, em ordem
 
@@ -81,7 +81,7 @@ Widget, sincronização, login, orçamento, recorrências, metas, Open Finance e
 
 ### 6. Completar as funções do produto base — concluída
 
-- **Entradas e saldo:** adicionar receitas para mostrar entradas, despesas e saldo mensal, mantendo o tipo do lançamento explícito.
+- **Controle de despesas:** resumir gastos por mês e acompanhar totais por categoria, mantendo o cadastro focado em despesas.
 - **Categorias próprias:** criar, renomear, arquivar e escolher ícone/cor; impedir que despesas existentes percam sua categoria.
 - **Busca e filtros:** pesquisar descrição e filtrar por intervalo de datas, categoria e tipo.
 - **Recorrências:** definir periodicidade e próxima ocorrência, com revisão clara antes de criar lançamentos futuros.
@@ -89,15 +89,19 @@ Widget, sincronização, login, orçamento, recorrências, metas, Open Finance e
 - **Exportação/backup:** exportar e importar os dados antes de oferecer continuidade entre dispositivos; validar arquivo e evitar duplicatas na importação.
 - Critério de conclusão: o uso diário do app não depende do widget e os dados podem ser recuperados pelo usuário.
 
-Implementado nesta etapa: entradas e saldo mensal, categorias personalizáveis/arquiváveis, busca e filtros por período/categoria/tipo, recorrências com confirmação manual, limites mensais por categoria e backup JSON com mesclagem ou substituição.
+Implementado nesta etapa: categorias personalizáveis/arquiváveis, busca e filtros por período/categoria/tags, recorrências com confirmação manual, limites mensais por categoria e importação/exportação CSV.
 
-### 7. Planejar e construir o widget Android — próxima etapa
+### 7. Planejar e construir o widget Android — concluída
 
 - Prototipar Glance em uma pasta/módulo Android e validar instalação/manifesto no projeto atual.
 - Definir o contrato de entrada rápida: valor e categoria opcionais; abrir o app para completar descrição/data quando necessário.
 - Reutilizar a validação e as regras do fluxo principal; o widget só acelera a entrada.
 - Definir passagem segura do rascunho para o fluxo Flutter e atualização do widget após salvar.
 - Critério de conclusão: adicionar um gasto pelo widget e vê-lo no app sem duplicidade; todas as funções do app continuam disponíveis sem ele.
+
+### Próxima etapa
+
+- Avaliar melhorias de usabilidade no cadastro rápido e nos insights de gastos. A integração Open Finance permanece posterior e depende de uma avaliação de provedores, custos e requisitos de backend.
 
 ### 8. Evoluções posteriores
 

@@ -2,8 +2,6 @@ enum ExpenseSource { manual, autoRule, openFinance }
 
 enum CategorizationMethod { manual, automatic }
 
-enum EntryType { expense, income }
-
 enum RecurrenceFrequency { weekly, monthly, yearly }
 
 class Expense {
@@ -13,7 +11,6 @@ class Expense {
     required this.description,
     required this.categoryId,
     required this.spentAt,
-    this.type = EntryType.expense,
     this.source = ExpenseSource.manual,
     this.categorizationMethod = CategorizationMethod.manual,
     this.recurrenceId,
@@ -25,7 +22,6 @@ class Expense {
   final String description;
   final String categoryId;
   final DateTime spentAt;
-  final EntryType type;
   final ExpenseSource source;
   final CategorizationMethod categorizationMethod;
   final String? recurrenceId;
@@ -37,7 +33,6 @@ class Expense {
     'description': description,
     'categoryId': categoryId,
     'spentAt': spentAt.toIso8601String(),
-    'type': type.name,
     'source': source.name,
     'categorizationMethod': categorizationMethod.name,
     'recurrenceId': recurrenceId,
@@ -50,10 +45,6 @@ class Expense {
     description: json['description'] as String,
     categoryId: json['categoryId'] as String,
     spentAt: DateTime.parse(json['spentAt'] as String),
-    type: EntryType.values.firstWhere(
-      (value) => value.name == json['type'],
-      orElse: () => EntryType.expense,
-    ),
     source: ExpenseSource.values.firstWhere(
       (value) => value.name == json['source'],
       orElse: () => ExpenseSource.manual,
@@ -71,7 +62,6 @@ class Expense {
     String? description,
     String? categoryId,
     DateTime? spentAt,
-    EntryType? type,
     ExpenseSource? source,
     CategorizationMethod? categorizationMethod,
     String? recurrenceId,
@@ -82,7 +72,6 @@ class Expense {
     description: description ?? this.description,
     categoryId: categoryId ?? this.categoryId,
     spentAt: spentAt ?? this.spentAt,
-    type: type ?? this.type,
     source: source ?? this.source,
     categorizationMethod: categorizationMethod ?? this.categorizationMethod,
     recurrenceId: recurrenceId ?? this.recurrenceId,
@@ -139,7 +128,6 @@ class RecurringRule {
     required this.description,
     required this.amountCents,
     required this.categoryId,
-    required this.type,
     required this.frequency,
     required this.nextDue,
     this.active = true,
@@ -149,7 +137,6 @@ class RecurringRule {
   final String description;
   final int amountCents;
   final String categoryId;
-  final EntryType type;
   final RecurrenceFrequency frequency;
   final DateTime nextDue;
   final bool active;
@@ -159,7 +146,6 @@ class RecurringRule {
     'description': description,
     'amountCents': amountCents,
     'categoryId': categoryId,
-    'type': type.name,
     'frequency': frequency.name,
     'nextDue': nextDue.toIso8601String(),
     'active': active,
@@ -170,10 +156,6 @@ class RecurringRule {
     description: json['description'] as String,
     amountCents: json['amountCents'] as int,
     categoryId: json['categoryId'] as String,
-    type: EntryType.values.firstWhere(
-      (v) => v.name == json['type'],
-      orElse: () => EntryType.expense,
-    ),
     frequency: RecurrenceFrequency.values.firstWhere(
       (v) => v.name == json['frequency'],
       orElse: () => RecurrenceFrequency.monthly,
