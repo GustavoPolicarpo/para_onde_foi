@@ -93,11 +93,10 @@ Implementado nesta etapa: categorias personalizáveis/arquiváveis, busca e filt
 
 ### 7. Planejar e construir o widget Android — concluída
 
-- Prototipar Glance em uma pasta/módulo Android e validar instalação/manifesto no projeto atual.
-- Definir o contrato de entrada rápida: valor e categoria opcionais; abrir o app para completar descrição/data quando necessário.
-- Reutilizar a validação e as regras do fluxo principal; o widget só acelera a entrada.
-- Definir passagem segura do rascunho para o fluxo Flutter e atualização do widget após salvar.
-- Critério de conclusão: adicionar um gasto pelo widget e vê-lo no app sem duplicidade; todas as funções do app continuam disponíveis sem ele.
+- Implementado como widget Android nativo com `RemoteViews`, serviço de lista e provedor Kotlin.
+- O modo compacto mostra o gasto do mês; ao expandir, permite percorrer os orçamentos e navegar entre meses.
+- O botão `+` abre o cadastro rápido; tocar no widget abre o app e tocar em um orçamento abre a página correspondente.
+- Critério de conclusão: cadastro rápido atualiza os dados do app; o widget é um atalho e o aplicativo continua funcional sem ele.
 
 ### Próxima etapa
 
@@ -112,12 +111,11 @@ Implementado nesta etapa: categorias personalizáveis/arquiváveis, busca e filt
 
 - Persistência Drift na web exige configuração e teste de implantação específicos; não presumir equivalência perfeita com SQLite nativo.
 - O armazenamento local em JSON não sincroniza Android com navegador e pode ser perdido ao limpar dados do app/browser. O backup exportado deve ser copiado para um local seguro pelo usuário.
-- Widget Glance roda fora do ciclo normal de telas Flutter. Validar o caminho de handoff cedo, antes de investir na UI final do widget.
+- O widget Android roda fora da árvore de telas Flutter. Mudanças no contrato entre o widget nativo e o app devem ser verificadas tanto com o app aberto quanto após iniciar o app pelo widget.
 - Agregadores e SDKs podem mudar disponibilidade, preço e suporte. Reavaliar quando a fase de Open Finance for priorizada.
 
 ## Referências técnicas
 
 - [Drift — suporte web](https://drift.simonbinder.eu/platforms/web/)
-- [Android Developers — criar widget com Glance](https://developer.android.com/develop/ui/compose/glance/create-app-widget)
-- [Android Developers — estado e ciclo de vida do GlanceAppWidget](https://developer.android.com/develop/ui/compose/glance/glance-app-widget)
-- [Pacote glance_widget no pub.dev](https://pub.dev/packages/glance_widget) — avaliar versão e compatibilidade no momento da implementação; não assumir o pacote como dependência antes do protótipo.
+- [Android Developers — widgets de app](https://developer.android.com/develop/ui/views/appwidgets/overview)
+- [Android Developers — coleções em widgets](https://developer.android.com/develop/ui/views/appwidgets/collections)
