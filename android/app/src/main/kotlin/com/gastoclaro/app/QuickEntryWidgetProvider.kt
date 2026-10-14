@@ -110,6 +110,14 @@ class QuickEntryWidgetProvider : AppWidgetProvider() {
             }
             views.setRemoteAdapter(R.id.widget_budgets, serviceIntent)
             views.setEmptyView(R.id.widget_budgets, R.id.widget_budget_empty)
+            views.setPendingIntentTemplate(
+                R.id.widget_budgets,
+                budgetPagePendingIntent(context, appWidgetId)
+            )
+            views.setOnClickPendingIntent(
+                R.id.widget_root,
+                openAppPendingIntent(context, appWidgetId)
+            )
             views.setOnClickPendingIntent(
                 R.id.widget_month_previous,
                 monthPendingIntent(context, appWidgetId, ACTION_PREVIOUS_MONTH, 0)
@@ -202,6 +210,41 @@ class QuickEntryWidgetProvider : AppWidgetProvider() {
                 appWidgetId,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+
+        private fun openAppPendingIntent(
+            context: Context,
+            appWidgetId: Int
+        ): PendingIntent {
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            return PendingIntent.getActivity(
+                context,
+                10000 + appWidgetId,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+
+        private fun budgetPagePendingIntent(
+            context: Context,
+            appWidgetId: Int
+        ): PendingIntent {
+            val intent = Intent(context, MainActivity::class.java).apply {
+                putExtra(MainActivity.EXTRA_WIDGET_BUDGETS, true)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            return PendingIntent.getActivity(
+                context,
+                20000 + appWidgetId,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
         }
     }

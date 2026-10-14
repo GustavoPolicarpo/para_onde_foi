@@ -66,13 +66,15 @@ Future<void> _syncWidgetSummary(
       : expenses
             .map((entry) => DateTime(entry.spentAt.year, entry.spentAt.month))
             .reduce((a, b) => a.isBefore(b) ? a : b);
-  final startMonth = earliestExpense.isAfter(currentMonth)
-      ? currentMonth
-      : earliestExpense;
+  final navigationStart = DateTime(currentMonth.year, currentMonth.month - 12);
+  final navigationEnd = DateTime(currentMonth.year, currentMonth.month + 12);
+  final startMonth = earliestExpense.isBefore(navigationStart)
+      ? earliestExpense
+      : navigationStart;
   final months = <Map<String, Object?>>[];
   for (
     var month = startMonth;
-    !month.isAfter(currentMonth);
+    !month.isAfter(navigationEnd);
     month = DateTime(month.year, month.month + 1)
   ) {
     final monthExpenses = expenses.where(
@@ -98,12 +100,36 @@ Future<void> _syncWidgetSummary(
         'spent': currency.format(spent / 100),
         'limit': limit == null ? 'Sem limite' : currency.format(limit / 100),
         'hasLimit': limit != null && limit > 0,
+        'remaining': limit == null || limit <= 0
+            ? 'Sem limite'
+            : '${spent > limit ? 'Excedido' : 'Restam'} ${currency.format((spent - limit).abs() / 100)}',
+        'remainingOver': limit != null && limit > 0 && spent > limit,
         'progress': limit == null || limit == 0
             ? 0
             : ((spent * 100) ~/ limit).clamp(0, 100),
         'over': limit != null && spent > limit,
       };
     }).toList();
+    final totalLimit = budgets.values
+        .where((limit) => limit > 0)
+        .fold<int>(0, (sum, limit) => sum + limit);
+    budgetRows.insert(0, {
+      'label': 'Total',
+      'isTotal': true,
+      'spent': currency.format(totalCents / 100),
+      'limit': totalLimit > 0
+          ? currency.format(totalLimit / 100)
+          : 'Sem limite',
+      'remaining': totalLimit <= 0
+          ? 'Sem limite'
+          : '${totalCents > totalLimit ? 'Excedido' : 'Restam'} ${currency.format((totalCents - totalLimit).abs() / 100)}',
+      'remainingOver': totalLimit > 0 && totalCents > totalLimit,
+      'over': totalLimit > 0 && totalCents > totalLimit,
+      'hasLimit': totalLimit > 0,
+      'progress': totalLimit == 0
+          ? 0
+          : ((totalCents * 100) ~/ totalLimit).clamp(0, 100),
+    });
     months.add({
       'key': DateFormat('yyyy-MM').format(month),
       'label': DateFormat('MMM/yy', 'pt_BR').format(month).toUpperCase(),
@@ -130,15 +156,19 @@ Future<void> main() async {
   final initialQuickEntry = await _widgetChannel
       .invokeMethod<bool>('getInitialQuickEntry')
       .catchError((_) => false);
+  final initialBudgetPage = await _widgetChannel
+      .invokeMethod<bool>('getInitialBudgetPage')
+      .catchError((_) => false);
   if (initialQuickEntry != true) {
-    runApp(const GastoClaroApp());
+    runApp(GastoClaroApp(initialBudgetPage: initialBudgetPage == true));
   } else {
     runApp(const QuickEntryApp());
   }
 }
 
 class GastoClaroApp extends StatefulWidget {
-  const GastoClaroApp({super.key});
+  const GastoClaroApp({super.key, this.initialBudgetPage = false});
+  final bool initialBudgetPage;
 
   @override
   State<GastoClaroApp> createState() => _GastoClaroAppState();
@@ -151,6 +181,8 @@ class _GastoClaroAppState extends State<GastoClaroApp> {
     _widgetChannel.setMethodCallHandler((call) async {
       if (call.method == 'openEntry') {
         _expenseHomeKey.currentState?._openExpense();
+      } else if (call.method == 'openBudgets') {
+        _expenseHomeKey.currentState?._openBudgets();
       }
     });
   }
@@ -187,7 +219,10 @@ class _GastoClaroAppState extends State<GastoClaroApp> {
         ),
       ),
     ),
-    home: ExpenseHome(key: _expenseHomeKey),
+    home: ExpenseHome(
+      key: _expenseHomeKey,
+      initialPage: widget.initialBudgetPage ? 2 : 0,
+    ),
   );
 }
 
@@ -315,7 +350,8 @@ class _QuickEntryHostState extends State<QuickEntryHost> {
 }
 
 class ExpenseHome extends StatefulWidget {
-  const ExpenseHome({super.key});
+  const ExpenseHome({super.key, this.initialPage = 0});
+  final int initialPage;
   @override
   State<ExpenseHome> createState() => _ExpenseHomeState();
 }
@@ -338,7 +374,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
   final Set<String> _selectedIds = {};
   bool _loading = true;
   bool _refreshInProgress = false;
-  int _page = 0;
+  late int _page = widget.initialPage;
   DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
   String? _categoryFilter;
 
@@ -347,6 +383,10 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  void _openBudgets() {
+    if (mounted) setState(() => _page = 2);
   }
 
   @override
@@ -1209,6 +1249,18 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
     final categories = _categories
         .where((category) => !category.archived)
         .toList();
+    final totalLimit = categories.fold<int>(
+      0,
+      (sum, category) => sum + (_budgets[category.id] ?? 0),
+    );
+    final totalUsed = _monthExpenses.fold<int>(
+      0,
+      (sum, entry) => sum + entry.amountCents,
+    );
+    final totalOver = totalLimit > 0 && totalUsed > totalLimit;
+    final totalRatio = totalLimit == 0
+        ? 0.0
+        : (totalUsed / totalLimit).clamp(0.0, 1.0);
     return ListView(
       children: [
         _pageHeader(
@@ -1217,6 +1269,68 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
         ),
         _monthSelector(),
         const SizedBox(height: 8),
+        Card(
+          color: Colors.grey.shade100,
+          margin: const EdgeInsets.only(bottom: 10),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.summarize_outlined, color: Colors.grey.shade600),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Total',
+                            style: TextStyle(
+                              color: Colors.grey.shade800,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            'Soma dos orçamentos por categoria',
+                            style: TextStyle(color: Colors.grey.shade600),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      totalLimit == 0
+                          ? 'Sem limite'
+                          : 'Limite ${_currency.format(totalLimit / 100)}',
+                      style: TextStyle(color: Colors.grey.shade700),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                LinearProgressIndicator(
+                  value: totalRatio,
+                  minHeight: 7,
+                  color: totalOver ? Colors.red.shade400 : Colors.grey.shade500,
+                  backgroundColor: Colors.white,
+                ),
+                const SizedBox(height: 7),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    totalLimit == 0
+                        ? 'Usado ${_currency.format(totalUsed / 100)}'
+                        : '${_currency.format(totalUsed / 100)} usado · ${totalOver ? 'acima do limite' : '${_currency.format((totalLimit - totalUsed) / 100)} restante'}',
+                    style: TextStyle(
+                      color: totalOver
+                          ? Colors.red.shade700
+                          : Colors.grey.shade700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
         ...categories.map((category) {
           final limit = _budgets[category.id] ?? 0;
           final used = expenseByCategory[category.id] ?? 0;

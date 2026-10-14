@@ -55,6 +55,12 @@ private class BudgetRemoteViewsFactory(
             R.id.widget_budget_amount,
             if (over) 0xFFB43D36.toInt() else 0xFF53635A.toInt()
         )
+        views.setTextViewText(R.id.widget_budget_remaining, row.optString("remaining"))
+        views.setTextColor(
+            R.id.widget_budget_remaining,
+            if (row.optBoolean("remainingOver", false)) 0xFFB43D36.toInt()
+            else 0xFF6B756E.toInt()
+        )
         views.setProgressBar(
             R.id.widget_budget_row_progress,
             100,
@@ -65,6 +71,8 @@ private class BudgetRemoteViewsFactory(
             R.id.widget_budget_row_progress,
             if (hasLimit) View.VISIBLE else View.GONE
         )
+        val fillInIntent = Intent().putExtra(MainActivity.EXTRA_WIDGET_BUDGETS, true)
+        views.setOnClickFillInIntent(R.id.widget_budget_item_root, fillInIntent)
         return views
     }
 

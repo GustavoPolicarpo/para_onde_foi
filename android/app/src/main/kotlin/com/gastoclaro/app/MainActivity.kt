@@ -20,6 +20,10 @@ class MainActivity : FlutterActivity() {
                     result.success(intent?.getBooleanExtra(EXTRA_WIDGET_QUICK_ENTRY, false) == true)
                     intent?.removeExtra(EXTRA_WIDGET_QUICK_ENTRY)
                 }
+                "getInitialBudgetPage" -> {
+                    result.success(intent?.getBooleanExtra(EXTRA_WIDGET_BUDGETS, false) == true)
+                    intent?.removeExtra(EXTRA_WIDGET_BUDGETS)
+                }
                 "updateWidgetSummary" -> {
                     QuickEntryWidgetProvider.updateSummary(
                         this,
@@ -39,9 +43,14 @@ class MainActivity : FlutterActivity() {
             widgetChannel?.invokeMethod("openEntry", null)
             intent.removeExtra(EXTRA_WIDGET_QUICK_ENTRY)
         }
+        if (intent.getBooleanExtra(EXTRA_WIDGET_BUDGETS, false)) {
+            widgetChannel?.invokeMethod("openBudgets", null)
+            intent.removeExtra(EXTRA_WIDGET_BUDGETS)
+        }
     }
 
     companion object {
         const val EXTRA_WIDGET_QUICK_ENTRY = "widget_quick_entry"
+        const val EXTRA_WIDGET_BUDGETS = "widget_open_budgets"
     }
 }
