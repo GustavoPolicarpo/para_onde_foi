@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="GastoClaro"
+        android:label="Para Onde Foi"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -30,7 +30,7 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:launchMode="singleTop"
-            android:taskAffinity="com.gastoclaro.app.quick_entry"
+            android:taskAffinity="com.paraondefoi.app.quick_entry"
             android:theme="@style/QuickEntryTheme"
             android:windowSoftInputMode="adjustResize">
             <meta-data

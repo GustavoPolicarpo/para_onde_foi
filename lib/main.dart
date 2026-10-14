@@ -12,7 +12,7 @@ import 'package:file_saver/file_saver.dart';
 import 'data/expense_repository.dart';
 import 'domain/expense.dart';
 
-const _widgetChannel = MethodChannel('gasto_claro/widget');
+const _widgetChannel = MethodChannel('para_onde_foi/widget');
 final _expenseHomeKey = GlobalKey<_ExpenseHomeState>();
 
 const _categoryIconOptions = <(String, String, IconData)>[
@@ -52,6 +52,23 @@ IconData _categoryIconData(String name) => _categoryIconOptions
       orElse: () => _categoryIconOptions.last,
     )
     .$3;
+
+List<ExpenseCategory> _orderCategories(
+  Iterable<ExpenseCategory> categories,
+  List<String> ids,
+) {
+  final positions = {for (var i = 0; i < ids.length; i++) ids[i]: i};
+  final result = categories.toList();
+  final originalPositions = {
+    for (var i = 0; i < result.length; i++) result[i].id: i,
+  };
+  result.sort((a, b) {
+    final aPosition = positions[a.id] ?? ids.length + originalPositions[a.id]!;
+    final bPosition = positions[b.id] ?? ids.length + originalPositions[b.id]!;
+    return aPosition.compareTo(bPosition);
+  });
+  return result;
+}
 
 Future<void> _syncWidgetSummary(
   List<Expense> expenses,
@@ -160,21 +177,21 @@ Future<void> main() async {
       .invokeMethod<bool>('getInitialBudgetPage')
       .catchError((_) => false);
   if (initialQuickEntry != true) {
-    runApp(GastoClaroApp(initialBudgetPage: initialBudgetPage == true));
+    runApp(ParaOndeFoiApp(initialBudgetPage: initialBudgetPage == true));
   } else {
     runApp(const QuickEntryApp());
   }
 }
 
-class GastoClaroApp extends StatefulWidget {
-  const GastoClaroApp({super.key, this.initialBudgetPage = false});
+class ParaOndeFoiApp extends StatefulWidget {
+  const ParaOndeFoiApp({super.key, this.initialBudgetPage = false});
   final bool initialBudgetPage;
 
   @override
-  State<GastoClaroApp> createState() => _GastoClaroAppState();
+  State<ParaOndeFoiApp> createState() => _ParaOndeFoiAppState();
 }
 
-class _GastoClaroAppState extends State<GastoClaroApp> {
+class _ParaOndeFoiAppState extends State<ParaOndeFoiApp> {
   @override
   void initState() {
     super.initState();
@@ -189,7 +206,7 @@ class _GastoClaroAppState extends State<GastoClaroApp> {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'GastoClaro',
+    title: 'Para Onde Foi',
     debugShowCheckedModeBanner: false,
     locale: const Locale('pt', 'BR'),
     supportedLocales: const [Locale('pt', 'BR')],
@@ -225,8 +242,6 @@ class _GastoClaroAppState extends State<GastoClaroApp> {
     ),
   );
 }
-
-typedef MyApp = GastoClaroApp;
 
 class QuickEntryApp extends StatelessWidget {
   const QuickEntryApp({super.key});
@@ -283,6 +298,7 @@ class _QuickEntryHostState extends State<QuickEntryHost> {
   Future<void> _prepare() async {
     await _applyDueRecurringExpenses(_repository);
     final customCategories = await _repository.loadCategories();
+    final categoryOrder = await _repository.loadCategoryOrder();
     final tags = await _repository.loadTags();
     final history = await _repository.load();
     final categoryMap = {
@@ -291,7 +307,7 @@ class _QuickEntryHostState extends State<QuickEntryHost> {
     };
     if (!mounted) return;
     setState(() {
-      _categories = categoryMap.values.toList();
+      _categories = _orderCategories(categoryMap.values, categoryOrder);
       _history = history;
       _tags = tags;
     });
@@ -408,6 +424,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
       await _applyDueRecurringExpenses(_repository);
       final expenses = await _repository.load();
       final customCategories = await _repository.loadCategories();
+      final categoryOrder = await _repository.loadCategoryOrder();
       final budgets = await _repository.loadBudgets();
       final recurringRules = await _repository.loadRecurringRules();
       final storedTags = await _repository.loadTags();
@@ -420,7 +437,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _expenses = expenses;
-        _categories = categoryMap.values.toList();
+        _categories = _orderCategories(categoryMap.values, categoryOrder);
         _budgets = budgets;
         _recurringRules = recurringRules;
         _tags = storedTags;
@@ -433,7 +450,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
       await _syncWidgetSummary(
         expenses,
         budgets,
-        categoryMap.values.toList(),
+        _orderCategories(categoryMap.values, categoryOrder),
         _currency,
       );
     } finally {
@@ -470,7 +487,12 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
       for (final category in next.where((category) => category.isCustom)) {
         categoryMap[category.id] = category;
       }
-      setState(() => _categories = categoryMap.values.toList());
+      final ordered = <ExpenseCategory>[
+        for (final category in next)
+          if (categoryMap.containsKey(category.id)) categoryMap.remove(category.id)!,
+        ...categoryMap.values,
+      ];
+      setState(() => _categories = ordered);
     }
   }
 
@@ -790,8 +812,8 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
     return ListView(
       children: [
         _pageHeader(
-          'Seu dinheiro,\nmais claro.',
-          'Acompanhe seus gastos com tranquilidade.',
+          'Para onde foi?',
+          'Veja como seus gastos se distribuem ao longo do mês.',
         ),
         const SizedBox(height: 20),
         _monthSelector(),
@@ -1574,19 +1596,26 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
+                  child: ReorderableListView(
+                    onReorder: (oldIndex, newIndex) async {
+                      final next = [..._categories];
+                      if (newIndex > oldIndex) newIndex--;
+                      final category = next.removeAt(oldIndex);
+                      next.insert(newIndex, category);
+                      await _persistCategories(next);
+                      await _repository.saveCategoryOrder(
+                        next.map((item) => item.id).toList(),
+                      );
+                      refresh(() {});
+                    },
                     children: _categories
                         .map(
                           (category) => ListTile(
+                            key: ValueKey(category.id),
                             leading: _categoryIcon(category, size: 34),
                             title: Text(category.label),
                             subtitle: category.archived
-                                ? const Text(
-                                    'Arquivada · lançamentos antigos preservados',
-                                  )
-                                : category.isCustom
-                                ? const Text('Personalizada')
+                                ? const Text('Arquivada')
                                 : null,
                             trailing: PopupMenuButton<String>(
                               onSelected: (value) async {
@@ -1642,6 +1671,66 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
                                   await _persistCategories(next);
                                   refresh(() {});
                                 }
+                                if (value == 'delete') {
+                                  final confirmed = await showDialog<bool>(
+                                    context: context,
+                                    builder: (confirmContext) => AlertDialog(
+                                      title: const Text('Excluir categoria?'),
+                                      content: Text(
+                                        'Os lançamentos e as regras recorrentes de "${category.label}" serão movidos para "Outros". Esta ação não pode ser desfeita.',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(confirmContext, false),
+                                          child: const Text('Cancelar'),
+                                        ),
+                                        FilledButton(
+                                          onPressed: () =>
+                                              Navigator.pop(confirmContext, true),
+                                          child: const Text('Excluir'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  if (confirmed != true || !context.mounted) {
+                                    return;
+                                  }
+                                  final expenses = _expenses
+                                      .map(
+                                        (entry) => entry.categoryId == category.id
+                                            ? entry.copyWith(
+                                                categoryId: 'other',
+                                              )
+                                            : entry,
+                                      )
+                                      .toList();
+                                  final rules = _recurringRules
+                                      .map(
+                                        (rule) => rule.categoryId == category.id
+                                            ? rule.copyWith(
+                                                categoryId: 'other',
+                                              )
+                                            : rule,
+                                      )
+                                      .toList();
+                                  final next = _categories
+                                      .where(
+                                        (item) => item.id != category.id,
+                                      )
+                                      .toList();
+                                  final budgets =
+                                      Map<String, int>.from(_budgets)
+                                        ..remove(category.id);
+                                  await _persist(expenses);
+                                  await _persistRecurring(rules);
+                                  await _persistBudgets(budgets);
+                                  await _persistCategories(next);
+                                  await _repository.saveCategoryOrder(
+                                    next.map((item) => item.id).toList(),
+                                  );
+                                  refresh(() {});
+                                }
                               },
                               itemBuilder: (_) => [
                                 const PopupMenuItem(
@@ -1654,6 +1743,11 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
                                     category.archived ? 'Reativar' : 'Arquivar',
                                   ),
                                 ),
+                                if (category.archived && category.isCustom)
+                                  const PopupMenuItem(
+                                    value: 'delete',
+                                    child: Text('Excluir permanentemente'),
+                                  ),
                               ],
                             ),
                           ),
@@ -1815,7 +1909,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
     try {
       final contents = await _repository.exportCsv();
       await FileSaver.instance.saveAs(
-        name: 'gastoclaro_despesas',
+        name: 'para_onde_foi_despesas',
         bytes: Uint8List.fromList(utf8.encode(contents)),
         fileExtension: 'csv',
         mimeType: MimeType.csv,

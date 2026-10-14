@@ -1,4 +1,4 @@
-package com.gastoclaro.app
+package com.paraondefoi.app
 
 import android.appwidget.AppWidgetManager
 import android.content.Intent
@@ -23,7 +23,7 @@ private class BudgetRemoteViewsFactory(
     override fun onCreate() = Unit
 
     override fun onDataSetChanged() {
-        val raw = context.getSharedPreferences("quick_entry_widget", 0)
+        val raw = context.getSharedPreferences("para_onde_foi_widget", 0)
             .getString("budgets_$appWidgetId", "[]") ?: "[]"
         rows = try {
             JSONArray(raw)

@@ -48,11 +48,12 @@ class ExpenseRepository {
     'proximo_vencimento',
     'ativa',
   ];
-  static const _entriesKey = 'gasto_claro.entries.v1';
-  static const _categoriesKey = 'gasto_claro.categories.v1';
-  static const _budgetsKey = 'gasto_claro.budgets.v1';
-  static const _recurringKey = 'gasto_claro.recurring.v1';
-  static const _tagsKey = 'gasto_claro.tags.v1';
+  static const _entriesKey = 'para_onde_foi.entries.v1';
+  static const _categoriesKey = 'para_onde_foi.categories.v1';
+  static const _categoryOrderKey = 'para_onde_foi.category_order.v1';
+  static const _budgetsKey = 'para_onde_foi.budgets.v1';
+  static const _recurringKey = 'para_onde_foi.recurring.v1';
+  static const _tagsKey = 'para_onde_foi.tags.v1';
   static Map<String, String> _tagIds(Iterable<String> values) {
     String slug(String value) => value
         .trim()
@@ -119,6 +120,12 @@ class ExpenseRepository {
         _categoriesKey,
         jsonEncode(categories.map((category) => category.toJson()).toList()),
       );
+
+  Future<List<String>> loadCategoryOrder() async =>
+      await _preferences.getStringList(_categoryOrderKey) ?? [];
+
+  Future<void> saveCategoryOrder(List<String> ids) =>
+      _preferences.setStringList(_categoryOrderKey, ids);
 
   Future<Map<String, int>> loadBudgets() async {
     final raw = await _preferences.getString(_budgetsKey);

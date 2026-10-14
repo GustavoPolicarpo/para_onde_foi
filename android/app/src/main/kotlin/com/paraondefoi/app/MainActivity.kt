@@ -1,4 +1,4 @@
-package com.gastoclaro.app
+package com.paraondefoi.app
 
 import android.content.Intent
 import io.flutter.embedding.android.FlutterActivity
@@ -12,7 +12,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         widgetChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            "gasto_claro/widget"
+            "para_onde_foi/widget"
         )
         widgetChannel?.setMethodCallHandler { call, result ->
             when (call.method) {

@@ -1,4 +1,4 @@
-package com.gastoclaro.app
+package com.paraondefoi.app
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
@@ -51,9 +51,9 @@ class QuickEntryWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
-        private const val PREFERENCES = "quick_entry_widget"
-        private const val ACTION_PREVIOUS_MONTH = "com.gastoclaro.app.PREVIOUS_MONTH"
-        private const val ACTION_NEXT_MONTH = "com.gastoclaro.app.NEXT_MONTH"
+        private const val PREFERENCES = "para_onde_foi_widget"
+        private const val ACTION_PREVIOUS_MONTH = "com.paraondefoi.app.PREVIOUS_MONTH"
+        private const val ACTION_NEXT_MONTH = "com.paraondefoi.app.NEXT_MONTH"
         private const val EXPANDED_HEIGHT_DP = 110
 
         fun updateSummary(context: Context, monthsJson: String) {
@@ -187,7 +187,7 @@ class QuickEntryWidgetProvider : AppWidgetProvider() {
             val intent = Intent(context, QuickEntryWidgetProvider::class.java).apply {
                 this.action = action
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-                data = Uri.parse("gastoclaro://widget/month/$appWidgetId/$offset")
+                data = Uri.parse("paraondefoi://widget/month/$appWidgetId/$offset")
             }
             return PendingIntent.getBroadcast(
                 context,

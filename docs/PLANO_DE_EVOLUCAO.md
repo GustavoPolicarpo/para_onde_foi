@@ -1,4 +1,4 @@
-# Plano revisado — GastoClaro
+# Plano revisado — Para Onde Foi
 
 ## Objetivo
 

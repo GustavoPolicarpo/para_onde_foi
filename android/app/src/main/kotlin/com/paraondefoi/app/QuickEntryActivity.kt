@@ -1,4 +1,4 @@
-package com.gastoclaro.app
+package com.paraondefoi.app
 
 import android.widget.Toast
 import io.flutter.embedding.android.FlutterActivity
@@ -12,7 +12,7 @@ class QuickEntryActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         quickEntryChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            "gasto_claro/widget"
+            "para_onde_foi/widget"
         )
         quickEntryChannel?.setMethodCallHandler { call, result ->
             when (call.method) {

@@ -1,4 +1,4 @@
-# GastoClaro
+# Para Onde Foi
 
 Aplicativo Flutter para acompanhar despesas pessoais no Android e na web.
 
