@@ -28,9 +28,7 @@ class QuickEntryActivity : FlutterActivity() {
                 "updateWidgetSummary" -> {
                     QuickEntryWidgetProvider.updateSummary(
                         this,
-                        call.argument<String>("month") ?: "",
-                        call.argument<String>("amount") ?: "R$ 0,00",
-                        call.argument<String>("budgets") ?: "[]"
+                        call.argument<String>("months") ?: "[]"
                     )
                     result.success(null)
                 }

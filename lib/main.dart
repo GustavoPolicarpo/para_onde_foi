@@ -60,33 +60,62 @@ Future<void> _syncWidgetSummary(
   NumberFormat currency,
 ) async {
   final now = DateTime.now();
-  final monthExpenses = expenses.where(
-    (entry) =>
-        entry.spentAt.year == now.year && entry.spentAt.month == now.month,
-  );
-  final totalCents = monthExpenses.fold<int>(
-    0,
-    (sum, entry) => sum + entry.amountCents,
-  );
-  final budgetRows = budgets.entries.map((budget) {
-    final spent = monthExpenses
-        .where((entry) => entry.categoryId == budget.key)
-        .fold<int>(0, (sum, entry) => sum + entry.amountCents);
-    return {
-      'label': categoryFor(budget.key, categories).label,
-      'spent': currency.format(spent / 100),
-      'limit': currency.format(budget.value / 100),
-      'progress': budget.value == 0
-          ? 0
-          : ((spent * 100) ~/ budget.value).clamp(0, 100),
-      'over': spent > budget.value,
-    };
-  }).toList();
+  final currentMonth = DateTime(now.year, now.month);
+  final earliestExpense = expenses.isEmpty
+      ? currentMonth
+      : expenses
+            .map((entry) => DateTime(entry.spentAt.year, entry.spentAt.month))
+            .reduce((a, b) => a.isBefore(b) ? a : b);
+  final startMonth = earliestExpense.isAfter(currentMonth)
+      ? currentMonth
+      : earliestExpense;
+  final months = <Map<String, Object?>>[];
+  for (
+    var month = startMonth;
+    !month.isAfter(currentMonth);
+    month = DateTime(month.year, month.month + 1)
+  ) {
+    final monthExpenses = expenses.where(
+      (entry) => entry.spentAt.year == month.year && entry.spentAt.month == month.month,
+    );
+    final totalCents = monthExpenses.fold<int>(
+      0,
+      (sum, entry) => sum + entry.amountCents,
+    );
+    final spentByCategory = <String, int>{};
+    for (final entry in monthExpenses) {
+      spentByCategory.update(
+        entry.categoryId,
+        (spent) => spent + entry.amountCents,
+        ifAbsent: () => entry.amountCents,
+      );
+    }
+    final budgetRows = categories.map((category) {
+      final spent = spentByCategory[category.id] ?? 0;
+      final limit = budgets[category.id];
+      return {
+        'label': category.label,
+        'spent': currency.format(spent / 100),
+        'limit': limit == null ? 'Sem limite' : currency.format(limit / 100),
+        'hasLimit': limit != null && limit > 0,
+        'progress': limit == null || limit == 0
+            ? 0
+            : ((spent * 100) ~/ limit).clamp(0, 100),
+        'over': limit != null && spent > limit,
+      };
+    }).toList();
+    months.add({
+      'key': DateFormat('yyyy-MM').format(month),
+      'label': DateFormat('MMM/yy', 'pt_BR').format(month).toUpperCase(),
+      'amount': currency.format(totalCents / 100),
+      'current': month.year == currentMonth.year &&
+          month.month == currentMonth.month,
+      'budgets': budgetRows,
+    });
+  }
   try {
     await _widgetChannel.invokeMethod<void>('updateWidgetSummary', {
-      'month': DateFormat('MMMM', 'pt_BR').format(now),
-      'amount': currency.format(totalCents / 100),
-      'budgets': jsonEncode(budgetRows),
+      'months': jsonEncode(months),
     });
   } on MissingPluginException {
     // Web and non-Android builds don't have the Android home widget.
