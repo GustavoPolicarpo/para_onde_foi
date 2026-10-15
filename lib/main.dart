@@ -299,11 +299,14 @@ class _QuickEntryHostState extends State<QuickEntryHost> {
     await _applyDueRecurringExpenses(_repository);
     final customCategories = await _repository.loadCategories();
     final categoryOrder = await _repository.loadCategoryOrder();
+    final deletedCategoryIds = await _repository.loadDeletedCategoryIds();
     final tags = await _repository.loadTags();
     final history = await _repository.load();
     final categoryMap = {
-      for (final category in expenseCategories) category.id: category,
-      for (final category in customCategories) category.id: category,
+      for (final category in expenseCategories)
+        if (!deletedCategoryIds.contains(category.id)) category.id: category,
+      for (final category in customCategories)
+        if (!deletedCategoryIds.contains(category.id)) category.id: category,
     };
     if (!mounted) return;
     setState(() {
@@ -425,13 +428,17 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
       final expenses = await _repository.load();
       final customCategories = await _repository.loadCategories();
       final categoryOrder = await _repository.loadCategoryOrder();
+      final deletedCategoryIds = await _repository.loadDeletedCategoryIds();
       final budgets = await _repository.loadBudgets();
       final recurringRules = await _repository.loadRecurringRules();
       final storedTags = await _repository.loadTags();
       final categoryMap = {
-        for (final category in expenseCategories) category.id: category,
+        for (final category in expenseCategories)
+          if (!deletedCategoryIds.contains(category.id)) category.id: category,
       };
-      for (final category in customCategories) {
+      for (final category in customCategories.where(
+        (item) => !deletedCategoryIds.contains(item.id),
+      )) {
         categoryMap[category.id] = category;
       }
       if (!mounted) return;
@@ -481,10 +488,15 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
       next.where((category) => category.isCustom).toList(),
     );
     if (mounted) {
+      final deletedCategoryIds = await _repository.loadDeletedCategoryIds();
       final categoryMap = {
-        for (final category in expenseCategories) category.id: category,
+        for (final category in expenseCategories)
+          if (!deletedCategoryIds.contains(category.id)) category.id: category,
       };
-      for (final category in next.where((category) => category.isCustom)) {
+      for (final category in next.where(
+        (category) =>
+            category.isCustom && !deletedCategoryIds.contains(category.id),
+      )) {
         categoryMap[category.id] = category;
       }
       final ordered = <ExpenseCategory>[
@@ -1696,6 +1708,16 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
                                   if (confirmed != true || !context.mounted) {
                                     return;
                                   }
+                                  if (expenseCategories.any(
+                                    (item) => item.id == category.id,
+                                  )) {
+                                    final deletedIds = await _repository
+                                        .loadDeletedCategoryIds();
+                                    await _repository.saveDeletedCategoryIds({
+                                      ...deletedIds,
+                                      category.id,
+                                    }.toList());
+                                  }
                                   final expenses = _expenses
                                       .map(
                                         (entry) => entry.categoryId == category.id
@@ -2091,19 +2113,31 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
-        subtitle: Wrap(
-          spacing: 5,
-          runSpacing: -6,
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('${category.label} · ${_dateFormat.format(expense.spentAt)}'),
-            ...expense.tags.map(_tagBadge),
-            if (expense.notes?.trim().isNotEmpty == true)
+            Text(
+              '${category.label} · ${_dateFormat.format(expense.spentAt)}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (expense.tags.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 5,
+                runSpacing: 4,
+                children: expense.tags.map(_tagBadge).toList(),
+              ),
+            ],
+            if (expense.notes?.trim().isNotEmpty == true) ...[
+              const SizedBox(height: 3),
               Text(
                 expense.notes!.trim(),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
               ),
+            ],
           ],
         ),
         trailing: Row(
@@ -2131,6 +2165,7 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
   }
 
   Widget _tagBadge(String tag) => Container(
+    constraints: const BoxConstraints(maxWidth: 180),
     padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.primary.withValues(alpha: .09),
@@ -2148,13 +2183,17 @@ class _ExpenseHomeState extends State<ExpenseHome> with WidgetsBindingObserver {
           color: Theme.of(context).colorScheme.primary,
         ),
         const SizedBox(width: 4),
-        Text(
-          tag,
-          style: TextStyle(
-            fontSize: 11,
-            height: 1.15,
-            fontWeight: FontWeight.w600,
-            color: Theme.of(context).colorScheme.primary,
+        Flexible(
+          child: Text(
+            tag,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 11,
+              height: 1.15,
+              fontWeight: FontWeight.w600,
+              color: Theme.of(context).colorScheme.primary,
+            ),
           ),
         ),
       ],

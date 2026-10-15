@@ -51,6 +51,8 @@ class ExpenseRepository {
   static const _entriesKey = 'para_onde_foi.entries.v1';
   static const _categoriesKey = 'para_onde_foi.categories.v1';
   static const _categoryOrderKey = 'para_onde_foi.category_order.v1';
+  static const _deletedCategoryIdsKey =
+      'para_onde_foi.deleted_category_ids.v1';
   static const _budgetsKey = 'para_onde_foi.budgets.v1';
   static const _recurringKey = 'para_onde_foi.recurring.v1';
   static const _tagsKey = 'para_onde_foi.tags.v1';
@@ -126,6 +128,12 @@ class ExpenseRepository {
 
   Future<void> saveCategoryOrder(List<String> ids) =>
       _preferences.setStringList(_categoryOrderKey, ids);
+
+  Future<List<String>> loadDeletedCategoryIds() async =>
+      await _preferences.getStringList(_deletedCategoryIdsKey) ?? [];
+
+  Future<void> saveDeletedCategoryIds(List<String> ids) =>
+      _preferences.setStringList(_deletedCategoryIdsKey, ids);
 
   Future<Map<String, int>> loadBudgets() async {
     final raw = await _preferences.getString(_budgetsKey);
